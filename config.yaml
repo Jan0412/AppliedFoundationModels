@@ -2,7 +2,7 @@ models:
   siglip:
     model_id: "google/siglip2-base-patch16-224"
     device: "auto"          # "auto" | "cuda" | "cpu"
-    batch_size: 64
+    batch_size: 256
 
   sam:
     model_id: "facebook/sam3"
@@ -18,4 +18,4 @@ models:
 
 indexing:
   db_path: "data/lancedb"
-  batch_size: 64        # optional — overrides models.siglip.batch_size
+  batch_size: 256        # optional — overrides models.siglip.batch_size
