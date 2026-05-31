@@ -1,0 +1,21 @@
+models:
+  siglip:
+    model_id: "google/siglip2-base-patch16-224"
+    device: "auto"          # "auto" | "cuda" | "cpu"
+    batch_size: 64
+
+  sam:
+    model_id: "facebook/sam3"
+    device: "auto"
+    threshold: 0.5
+    mask_threshold: 0.5
+
+  grounding_dino:
+    model_id: "IDEA-Research/grounding-dino-base"
+    device: "auto"
+    box_threshold: 0.35   # minimum objectness score to keep a box
+    text_threshold: 0.25  # minimum token-level score to assign a label
+
+indexing:
+  db_path: "data/lancedb"
+  batch_size: 64        # optional — overrides models.siglip.batch_size
