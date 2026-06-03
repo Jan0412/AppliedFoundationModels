@@ -6,6 +6,7 @@ tmp_config       – a temp config.yaml whose values match the real config.yaml.
 fake_pil_image   – a tiny 32×32 RGB PIL.Image (no disk I/O).
 mock_siglip_patches – monkeypatches AutoModel / AutoProcessor in src.models.siglib.
 mock_sam_patches    – monkeypatches Sam3Model / Sam3Processor in src.models.sam.
+mock_sam_vit_patches – monkeypatches SamModel / SamProcessor / pipeline in src.models.sam_vit.
 """
 from __future__ import annotations
 
@@ -37,6 +38,14 @@ def tmp_config(tmp_path):
                 "device": "auto",
                 "threshold": 0.5,
                 "mask_threshold": 0.5,
+            },
+            "sam_vit": {
+                "model_id": "facebook/sam-vit-base",
+                "device": "auto",
+                "points_per_side": 32,
+                "points_per_batch": 64,
+                "pred_iou_thresh": 0.88,
+                "stability_score_thresh": 0.95,
             },
             "grounding_dino": {
                 "model_id": "IDEA-Research/grounding-dino-base",
@@ -273,4 +282,80 @@ def mock_dino_patches(monkeypatch):
         "processor": mock_processor,
         "AutoModel": mock_auto_model_cls,
         "AutoProcessor": mock_auto_processor_cls,
+    }
+
+
+# ---------------------------------------------------------------------------
+# SAM ViT mock helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_sam_vit_model_mock() -> MagicMock:
+    """Return a MagicMock that behaves like a loaded SamModel."""
+    model = MagicMock()
+    model.device = torch.device("cpu")
+    model.eval.return_value = model
+    return model
+
+
+def _make_sam_vit_processor_mock() -> MagicMock:
+    """Return a MagicMock that behaves like a SamProcessor."""
+    processor = MagicMock()
+    # SamViTModel accesses processor.image_processor to build the pipeline
+    processor.image_processor = MagicMock()
+    return processor
+
+
+def _make_sam_vit_pipeline_mock(img_h: int = 32, img_w: int = 32) -> MagicMock:
+    """Return a callable MagicMock that mimics the mask-generation pipeline output.
+
+    Matches the transformers 5.x MaskGenerationPipeline dict format:
+      {"masks": List[np.ndarray], "scores": Tensor, "bounding_boxes": Tensor (N,4) XYXY}
+    """
+    import numpy as np
+
+    center_mask = np.zeros((img_h, img_w), dtype=bool)
+    cy0, cy1 = img_h // 4, 3 * img_h // 4
+    cx0, cx1 = img_w // 4, 3 * img_w // 4
+    center_mask[cy0:cy1, cx0:cx1] = True
+
+    pipeline_mock = MagicMock()
+    pipeline_mock.return_value = {
+        "masks": [center_mask],
+        "scores": torch.tensor([0.92]),
+        "bounding_boxes": torch.tensor([[float(cx0), float(cy0), float(cx1), float(cy1)]]),
+    }
+    return pipeline_mock
+
+
+@pytest.fixture
+def mock_sam_vit_patches(monkeypatch):
+    """Patch SamModel, SamProcessor, and pipeline in src.models.sam_vit.
+
+    Returns a dict with keys ``model``, ``processor``, ``pipeline``,
+    ``SamModel``, ``SamProcessor`` for inspection in tests.
+    """
+    mock_model = _make_sam_vit_model_mock()
+    mock_processor = _make_sam_vit_processor_mock()
+    mock_pipeline = _make_sam_vit_pipeline_mock()
+
+    mock_sam_model_cls = MagicMock()
+    mock_sam_model_cls.from_pretrained.return_value = mock_model
+
+    mock_sam_processor_cls = MagicMock()
+    mock_sam_processor_cls.from_pretrained.return_value = mock_processor
+
+    mock_pipeline_factory = MagicMock(return_value=mock_pipeline)
+
+    monkeypatch.setattr("src.models.sam_vit.SamModel", mock_sam_model_cls)
+    monkeypatch.setattr("src.models.sam_vit.SamProcessor", mock_sam_processor_cls)
+    monkeypatch.setattr("src.models.sam_vit.pipeline", mock_pipeline_factory)
+
+    return {
+        "model": mock_model,
+        "processor": mock_processor,
+        "pipeline": mock_pipeline,
+        "pipeline_factory": mock_pipeline_factory,
+        "SamModel": mock_sam_model_cls,
+        "SamProcessor": mock_sam_processor_cls,
     }
