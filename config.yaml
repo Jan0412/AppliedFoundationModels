@@ -10,6 +10,14 @@ models:
     threshold: 0.5
     mask_threshold: 0.5
 
+  sam_vit:
+    model_id: "facebook/sam-vit-base"   # base | large | huge
+    device: "auto"
+    points_per_side: 32
+    points_per_batch: 64
+    pred_iou_thresh: 0.88
+    stability_score_thresh: 0.95
+
   grounding_dino:
     model_id: "IDEA-Research/grounding-dino-base"
     device: "auto"
@@ -19,3 +27,12 @@ models:
 indexing:
   db_path: "data/lancedb"
   batch_size: 256        # optional — overrides models.siglip.batch_size
+
+preprocess:
+  background: "gray"          # gray | black | white | noise
+  selection: "area_centrality"
+  margin: 0.1                 # bbox padding as fraction of bbox edge
+  output_size: 224            # square output edge for SigLIP
+  top_n: 5                   # number of object crops to return per image (1 = best only)
+  noise_mean: 128.0           # only used when background: "noise"
+  noise_std: 40.0
