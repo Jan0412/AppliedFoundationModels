@@ -6,18 +6,33 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "accelerate>=1.0.0",
+    "einops>=0.8.2",
+    "evo>=1.36.5",
     "huggingface-hub>=1.16.1",
     "jupyterlab>=4.5.7",
     "k3d>=2.17.0",
     "lancedb>=0.30.2",
     "langchain>=1.3.1",
     "matplotlib>=3.10.9",
+    "munch>=4.0.0",
+    "numpy<2",
+    "nvidia-cudnn-cu12>=9.1.0",
+    "nvidia-nccl-cu12>=2.21.5",
+    "open3d>=0.19.0",
+    "opencv-python>=4.11.0.86",
     "plotly>=6.7.0",
+    "pykdtree>=1.4.3",
+    "pypose>=0.9.5",
     "pyyaml>=6.0",
-    "torchvision>=0.27.0",
+    "rerun-sdk==0.23.1",
+    "scipy>=1.17.1",
+    "tensorboard>=2.20.0",
+    "torch>=2.5.1",
+    "torchvision>=0.18.0",
     "tqdm>=4.66",
     "transformers>=5.9.0",
     "vggt",
+    "xformers>=0.0.29.post1",
 ]
 
 [dependency-groups]
@@ -33,5 +48,12 @@ pythonpath = ["."]
 markers = ["slow: requires real model downloads and a GPU — skipped by default"]
 addopts = "-m 'not slow'"
 
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
 [tool.uv.sources]
+torch = { index = "pytorch-cu121" }
+torchvision = { index = "pytorch-cu121" }
 vggt = { git = "https://github.com/facebookresearch/vggt.git" }
