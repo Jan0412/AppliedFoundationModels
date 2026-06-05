@@ -1,3 +1,4 @@
 [submodule "external/vista-slam"]
 	path = external/vista-slam
 	url = https://github.com/zhangganlin/vista-slam.git
+	ignore = untracked
