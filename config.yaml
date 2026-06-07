@@ -1,4 +1,30 @@
 models:
+  reconstructors:
+    vista_slam: # For details about the params see comments in: https://github.com/zhangganlin/vista-slam/blob/main/configs/default.yaml
+      device: "cuda"
+      verbose: True
+      keyframe_detection: "stride"  # use every x frames as keyframes
+      stride: 9
+      max_view_num: 400
+      point_conf_thres: 4.2 
+      neighbor_edge_num: 2
+      loop_edge_num: 2
+      loop_dist_min: 40     
+      loop_nms: 40          
+      loop_cand_thresh_neighbor: 5 
+      rel_pose_thres: 0.75
+      pgo_every: 500
+      random_seed: 43
+      rerun_vis: False
+      rerun_url: rerun+http://127.0.0.1:9876/proxy
+      rerun_save: False
+      flow_thres: 5.0  # not used in this config
+      output_dir: _  # will be overridden
+      STA_pretrain_path: pretrains/frontend_sta_weights.pth   # dont change this
+      vocab_path: pretrains/ORBvoc.txt                        # dont change this
+
+    #vggt TODO: add vggt reconstructor
+
   siglip:
     model_id: "google/siglip2-base-patch16-224"
     device: "auto"          # "auto" | "cuda" | "cpu"
