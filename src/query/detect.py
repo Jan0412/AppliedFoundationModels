@@ -62,6 +62,8 @@ class Detect(Runnable):
                     scores=scores,
                     masks=list(out["masks"]) if "masks" in out else None,
                     labels=list(out["labels"]) if "labels" in out else None,
+                    depth_path=ri.depth_path,
+                    cam2world=ri.cam2world,
                 )
             )
 

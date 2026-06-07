@@ -36,12 +36,17 @@ class RetrievedImage(BaseModel):
                           original was a PIL image).
         similarity_score: Cosine similarity to the query embedding (high = closer).
         image:            Lazily-loaded RGB :class:`PIL.Image.Image`.
+        depth_path:       Paired depth-map path stored at index time ("" if none).
+        cam2world:        ``(4, 4)`` camera-to-world pose stored at index time,
+                          or ``None`` when the row predates 3D indexing.
     """
 
     id: str
     path: str
     similarity_score: float
     image: Image.Image
+    depth_path: str = ""
+    cam2world: Optional[np.ndarray] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -68,6 +73,10 @@ class DetectedImage(BaseModel):
         scores:            Full detector confidence tensor.
         masks:             SAM-only: list of boolean tensors, one per segment.
         labels:            Grounding-DINO-only: list of matched label strings.
+        depth_path:        Paired depth-map path carried from retrieval (for 3D
+                           back-projection); "" if none.
+        cam2world:         ``(4, 4)`` camera-to-world pose carried from retrieval,
+                           or ``None``.
     """
 
     id: str
@@ -78,6 +87,34 @@ class DetectedImage(BaseModel):
     scores: torch.Tensor
     masks: Optional[list[Any]] = None
     labels: Optional[list[str]] = None
+    depth_path: str = ""
+    cam2world: Optional[np.ndarray] = None
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
+class ProjectedObject(BaseModel):
+    """One result back-projected into the 3D world point cloud.
+
+    Produced by :class:`ProjectTo3D` from a :class:`DetectedImage`'s best mask
+    plus the frame's depth map, pose, and the collection intrinsics. Holds
+    everything needed to highlight the searched object inside the scene cloud.
+
+    Attributes:
+        id:     LanceDB row id of the source frame.
+        path:   Source RGB image path.
+        points: ``(N, 3)`` float array of world-space XYZ for the masked pixels
+                (or box-region pixels when the detector gave only a 2D box).
+        colors: ``(N, 3)`` ``uint8`` RGB sampled at those pixels, or ``None``.
+        bbox:   ``(2, 3)`` axis-aligned world box ``[[min],[max]]`` over the
+                points (robust-percentile trimmed), or ``None`` if no points.
+    """
+
+    id: str
+    path: str
+    points: np.ndarray
+    colors: Optional[np.ndarray] = None
+    bbox: Optional[np.ndarray] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -99,6 +136,9 @@ class SearchState(BaseModel):
         detected:        Set by :class:`Detect` (full, unsorted).
         results:         Set by :class:`RerankByDetection`
                          (sorted desc by ``detection_score``, trimmed).
+        projected:       Set by :class:`ProjectTo3D` — a **single** fused
+                         :class:`ProjectedObject` (all frames' points merged,
+                         clustered, and reduced to one tight 3D box), or empty.
     """
 
     query: str
@@ -110,5 +150,6 @@ class SearchState(BaseModel):
     retrieved: Optional[list[RetrievedImage]] = None
     detected: Optional[list[DetectedImage]] = None
     results: Optional[list[DetectedImage]] = None
+    projected: Optional[list[ProjectedObject]] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

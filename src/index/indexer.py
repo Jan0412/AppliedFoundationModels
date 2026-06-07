@@ -29,6 +29,7 @@ import io
 from pathlib import Path
 from typing import Callable
 
+import numpy as np
 import pyarrow as pa
 import yaml
 from PIL import Image
@@ -38,6 +39,21 @@ from src.models import SigLIPModel
 from src.utils.db import connect as _db_connect
 
 from .status import JobRegistry, JobStatus
+
+
+def _flatten_pose(pose) -> list[float]:
+    """Coerce a 4x4 camera-to-world pose into a 16-float row-major list.
+
+    Accepts a NumPy array or nested sequence shaped ``(4, 4)``. Raises
+    :class:`ValueError` for any other shape so a malformed pose is caught at
+    index time rather than producing silently wrong 3D points later.
+    """
+    arr = np.asarray(pose, dtype=np.float32)
+    if arr.shape != (4, 4):
+        raise ValueError(
+            f"each pose must be a 4x4 cam2world matrix; got shape {arr.shape}."
+        )
+    return arr.reshape(16).tolist()
 
 
 class Indexer:
@@ -103,13 +119,31 @@ class Indexer:
     # LanceDB schema & table helpers
     # ------------------------------------------------------------------
 
+    #: Name of the side table holding one calibration row per collection.
+    META_TABLE = "_collection_meta"
+
     def _schema(self) -> pa.Schema:
         return pa.schema([
             pa.field("id",            pa.string()),
             pa.field("collection_id", pa.string()),
             pa.field("vector",        pa.list_(pa.float32(), self.model.embedding_dim)),
             pa.field("path",          pa.string()),
-            pa.field("timestamp",     pa.float64()),
+            pa.field("depth_path",    pa.string()),
+            # Variable-length (not fixed-size) on purpose: a fixed-size float
+            # list is treated by LanceDB as a *vector* column, which would make
+            # vector search ambiguous against the real ``vector`` column. The
+            # 16-element invariant is enforced in ``_flatten_pose`` instead.
+            pa.field("cam2world",     pa.list_(pa.float32())),
+        ])
+
+    def _meta_schema(self) -> pa.Schema:
+        return pa.schema([
+            pa.field("collection_id", pa.string()),
+            pa.field("fx",            pa.float64()),
+            pa.field("fy",            pa.float64()),
+            pa.field("cx",            pa.float64()),
+            pa.field("cy",            pa.float64()),
+            pa.field("depth_scale",   pa.float64()),
         ])
 
     def _open_or_create_table(self, collection_id: str):
@@ -117,6 +151,49 @@ class Indexer:
         if collection_id in self.db.list_tables().tables:
             return self.db.open_table(collection_id)
         return self.db.create_table(collection_id, schema=self._schema())
+
+    def _write_meta(
+        self,
+        collection_id: str,
+        intrinsics: dict,
+        depth_scale: float,
+    ) -> None:
+        """Upsert the per-collection calibration row into :attr:`META_TABLE`.
+
+        Args:
+            collection_id: The collection whose calibration this describes.
+            intrinsics:    Mapping with float keys ``fx``, ``fy``, ``cx``, ``cy``.
+            depth_scale:   Divisor that converts raw depth units to metres.
+        """
+        try:
+            missing = [k for k in ("fx", "fy", "cx", "cy") if k not in intrinsics]
+        except TypeError as exc:
+            raise ValueError(
+                f"intrinsics must be a mapping with fx/fy/cx/cy; got "
+                f"{type(intrinsics).__name__!r}."
+            ) from exc
+        if missing:
+            raise ValueError(f"intrinsics is missing keys: {missing!r}")
+
+        if self.META_TABLE in self.db.list_tables().tables:
+            meta = self.db.open_table(self.META_TABLE)
+        else:
+            meta = self.db.create_table(self.META_TABLE, schema=self._meta_schema())
+
+        row = {
+            "collection_id": collection_id,
+            "fx": float(intrinsics["fx"]),
+            "fy": float(intrinsics["fy"]),
+            "cx": float(intrinsics["cx"]),
+            "cy": float(intrinsics["cy"]),
+            "depth_scale": float(depth_scale),
+        }
+        (
+            meta.merge_insert("collection_id")
+            .when_matched_update_all()
+            .when_not_matched_insert_all()
+            .execute([row])
+        )
 
     # ------------------------------------------------------------------
     # Input normalisation
@@ -127,23 +204,29 @@ class Indexer:
         images: list,
         collection_id: str,
         ids: list[str] | None,
-        timestamps: list[float] | None,
+        depth_paths: list[str],
+        poses: list,
     ) -> list[dict]:
         """Validate inputs and return a uniform list of record dicts.
 
         Each record::
 
             {
-                "load": Callable[[], PIL.Image.Image],  # lazy image loader
-                "id":   str,                            # unique row key
-                "path": str,                            # source path (or "")
-                "ts":   float,                          # timestamp (or 0.0)
+                "load":       Callable[[], PIL.Image.Image],  # lazy image loader
+                "id":         str,                  # unique row key
+                "path":       str,                  # source RGB path (or "")
+                "depth_path": str,                  # paired depth-map path
+                "cam2world":  list[float],          # row-major flattened 4x4 pose
             }
 
         Accepted *images* element types:
 
         - ``str`` / :class:`pathlib.Path` — image file path; loaded lazily.
         - :class:`PIL.Image.Image` — pre-loaded image.
+
+        ``depth_paths`` and ``poses`` are **required** and must each have the
+        same length as ``images`` (one depth file and one camera pose per
+        frame); they are what makes a collection projectable to 3D.
 
         Id derivation when *ids* is ``None``:
 
@@ -157,9 +240,15 @@ class Indexer:
             raise ValueError(
                 f"len(ids)={len(ids)} does not match len(images)={n}"
             )
-        if timestamps is not None and len(timestamps) != n:
+        if depth_paths is None or len(depth_paths) != n:
             raise ValueError(
-                f"len(timestamps)={len(timestamps)} does not match len(images)={n}"
+                f"depth_paths is required and must match len(images)={n}; "
+                f"got {None if depth_paths is None else len(depth_paths)}."
+            )
+        if poses is None or len(poses) != n:
+            raise ValueError(
+                f"poses is required and must match len(images)={n}; "
+                f"got {None if poses is None else len(poses)}."
             )
 
         records: list[dict] = []
@@ -196,10 +285,11 @@ class Indexer:
                 )
 
             records.append({
-                "load": load,
-                "id":   rid,
-                "path": path,
-                "ts":   float(timestamps[i]) if timestamps is not None else 0.0,
+                "load":       load,
+                "id":         rid,
+                "path":       path,
+                "depth_path": str(depth_paths[i]),
+                "cam2world":  _flatten_pose(poses[i]),
             })
 
         # Detect duplicate ids within this call
@@ -254,7 +344,8 @@ class Indexer:
                         "collection_id": job.collection_id,
                         "vector":        v.tolist(),
                         "path":          r["path"],
-                        "timestamp":     r["ts"],
+                        "depth_path":    r["depth_path"],
+                        "cam2world":     r["cam2world"],
                     }
                     for r, v in zip(batch, vecs)
                 ]
@@ -272,8 +363,11 @@ class Indexer:
         images: list,
         collection_id: str,
         *,
+        depth_paths: list[str],
+        poses: list,
+        intrinsics: dict,
+        depth_scale: float,
         ids: list[str] | None = None,
-        timestamps: list[float] | None = None,
         job_id: str | None = None,
     ) -> JobStatus:
         """Embed *images* and insert them as new rows into *collection_id*.
@@ -285,16 +379,25 @@ class Indexer:
             images:        List of ``str``/``Path`` (file paths) or
                            ``PIL.Image.Image`` objects.
             collection_id: Name of the LanceDB table (= the room / benchmark).
+            depth_paths:   One depth-map path per image (required). Paired with
+                           ``poses`` and ``intrinsics`` so the collection can be
+                           back-projected to 3D at query time.
+            poses:         One 4x4 cam-to-world matrix per image (required).
+            intrinsics:    Per-collection camera intrinsics — a mapping with
+                           keys ``fx``, ``fy``, ``cx``, ``cy``. Stored once in
+                           :attr:`META_TABLE`.
+            depth_scale:   Per-collection divisor converting raw depth units to
+                           metres (e.g. 5000 for TUM, 1000 for ScanNet).
             ids:           Optional explicit ids, one per image.  Auto-derived
                            from the path or image content when ``None``.
-            timestamps:    Optional float timestamps, one per image.
             job_id:        Optional caller-supplied job id (e.g. request UUID).
 
         Returns:
             A :class:`~src.index.status.JobStatus` with ``state="done"``.
         """
-        records = self._normalize(images, collection_id, ids, timestamps)
+        records = self._normalize(images, collection_id, ids, depth_paths, poses)
         table   = self._open_or_create_table(collection_id)
+        self._write_meta(collection_id, intrinsics, depth_scale)
 
         # Pre-flight conflict check (only when the table is non-empty)
         if table.count_rows() > 0:
@@ -330,8 +433,11 @@ class Indexer:
         images: list,
         collection_id: str,
         *,
+        depth_paths: list[str],
+        poses: list,
+        intrinsics: dict,
+        depth_scale: float,
         ids: list[str] | None = None,
-        timestamps: list[float] | None = None,
         job_id: str | None = None,
     ) -> JobStatus:
         """Embed *images* and upsert them into *collection_id*.
@@ -341,15 +447,20 @@ class Indexer:
         Args:
             images:        List of ``str``/``Path`` or ``PIL.Image.Image``.
             collection_id: LanceDB table name.
+            depth_paths:   One depth-map path per image (required).
+            poses:         One 4x4 cam-to-world matrix per image (required).
+            intrinsics:    Per-collection intrinsics (``fx``, ``fy``, ``cx``,
+                           ``cy``); upserted into :attr:`META_TABLE`.
+            depth_scale:   Per-collection depth divisor (raw units → metres).
             ids:           Optional explicit ids.
-            timestamps:    Optional float timestamps.
             job_id:        Optional caller-supplied job id.
 
         Returns:
             A :class:`~src.index.status.JobStatus` with ``state="done"``.
         """
-        records = self._normalize(images, collection_id, ids, timestamps)
+        records = self._normalize(images, collection_id, ids, depth_paths, poses)
         table   = self._open_or_create_table(collection_id)
+        self._write_meta(collection_id, intrinsics, depth_scale)
 
         def _upsert(t, rows: list[dict]) -> None:
             (

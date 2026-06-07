@@ -19,11 +19,17 @@ work out of the box::
     chain = pipeline.embed | pipeline.retrieve | pipeline.detect
 """
 
-from src.data_model import DetectedImage, RetrievedImage, SearchState
+from src.data_model import (
+    DetectedImage,
+    ProjectedObject,
+    RetrievedImage,
+    SearchState,
+)
 
 from .detect import Detect
 from .embed import EmbedQuery
 from .pipeline import Search2D
+from .project import ProjectTo3D
 from .rerank import RerankByDetection
 from .retrieve import RetrieveSimilar
 
@@ -32,8 +38,10 @@ __all__ = [
     "SearchState",
     "RetrievedImage",
     "DetectedImage",
+    "ProjectedObject",
     "EmbedQuery",
     "RetrieveSimilar",
     "Detect",
     "RerankByDetection",
+    "ProjectTo3D",
 ]

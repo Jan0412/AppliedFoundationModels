@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+import numpy as np
 from langchain_core.runnables import Runnable, RunnableConfig
 from PIL import Image
 
@@ -53,12 +54,21 @@ class RetrieveSimilar(Runnable):
             similarity = 1.0 - dist_sq / 2.0
             path = row["path"]
             image = Image.open(path).convert("RGB")
+            # Calibration written at index time (absent on pre-3D collections).
+            cam = row.get("cam2world")
+            cam2world = (
+                np.asarray(cam, dtype=np.float32).reshape(4, 4)
+                if cam is not None
+                else None
+            )
             retrieved.append(
                 RetrievedImage(
                     id=row["id"],
                     path=path,
                     similarity_score=similarity,
                     image=image,
+                    depth_path=row.get("depth_path", "") or "",
+                    cam2world=cam2world,
                 )
             )
 

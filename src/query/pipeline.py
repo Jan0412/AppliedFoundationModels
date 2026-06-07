@@ -13,6 +13,7 @@ from src.utils.db import connect as _db_connect
 
 from .detect import Detect
 from .embed import EmbedQuery
+from .project import ProjectTo3D
 from .rerank import RerankByDetection
 from .retrieve import RetrieveSimilar
 
@@ -21,15 +22,20 @@ Detector = Union[SAMModel, GroundingDINOModel]
 
 
 class Search2D:
-    """Composes the four pipeline steps into a single LCEL chain.
+    """Composes the five pipeline steps into a single LCEL chain.
 
     The step instances are exposed as public attributes (:attr:`embed`,
-    :attr:`retrieve`, :attr:`detect`, :attr:`rerank`) so callers can
-    build partial chains. For example, to skip re-ranking::
+    :attr:`retrieve`, :attr:`detect`, :attr:`rerank`, :attr:`project`) so
+    callers can build partial chains. For example, to stop at 2D results and
+    skip 3D projection::
 
-        chain = pipeline.embed | pipeline.retrieve | pipeline.detect
+        chain = pipeline.embed | pipeline.retrieve | pipeline.detect | pipeline.rerank
         state = chain.invoke(SearchState(query="...", collection_id="..."))
-        # state.detected populated, state.results stays None.
+        # state.results populated, state.projected stays None.
+
+    The final :attr:`project` step back-projects each result's SAM mask into
+    the 3D world point cloud (``state.projected``); it requires the SAM
+    detector and a collection indexed with depth + poses + calibration.
 
     The detector is one of :class:`SAMModel` or :class:`GroundingDINOModel`
     (both share the ``invoke({"image": pil, "text": str}) -> dict``
@@ -57,7 +63,10 @@ class Search2D:
         self.retrieve = RetrieveSimilar(db)
         self.detect = Detect(detector)
         self.rerank = RerankByDetection()
-        self.chain = self.embed | self.retrieve | self.detect | self.rerank
+        self.project = ProjectTo3D(db)
+        self.chain = (
+            self.embed | self.retrieve | self.detect | self.rerank | self.project
+        )
 
     @classmethod
     def from_config(
