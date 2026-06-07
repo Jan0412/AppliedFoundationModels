@@ -216,3 +216,6 @@ def test_end_to_end_with_dino_detector(
     )
     assert all(r.labels is not None for r in out.results)
     assert all(r.masks is None for r in out.results)
+    # Box-only detector still yields 3D boxes via the box back-projection path.
+    assert out.projected is not None and len(out.projected) >= 1
+    assert all(p.bbox is not None for p in out.projected)

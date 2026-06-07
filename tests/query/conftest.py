@@ -104,17 +104,34 @@ def tiny_image_files(tmp_path):
 def populated_db(tmp_path, tiny_image_files):
     """Create a LanceDB collection ``coll`` with 3 known vectors + images.
 
+    The collection is fully projectable: each row carries a ``depth_path`` and
+    a flattened identity ``cam2world`` pose, and a ``_collection_meta`` row holds
+    the intrinsics + depth_scale (mirroring what :class:`Indexer` writes).
+
     Returns a dict with:
         db             — open lancedb.DBConnection
         collection_id  — "coll"
         ids            — [str, str, str]
         paths          — [str, str, str]
+        depth_paths    — [str, str, str]
         vectors        — np.ndarray, shape (3, EMBED_DIM), L2-normalised
+        intrinsics     — {"fx","fy","cx","cy"}
+        depth_scale    — float
     """
     paths = tiny_image_files(3)
+    # Constant-depth 8x8 16-bit depth maps, one per RGB frame.
+    depth_dir = tmp_path / "depth"
+    depth_dir.mkdir(exist_ok=True)
+    depth_paths = []
+    for i in range(3):
+        dp = depth_dir / f"{i:02d}.png"
+        Image.fromarray(np.full((8, 8), 1000, dtype=np.uint16)).save(dp)
+        depth_paths.append(str(dp))
+
     # Three normalised, axis-aligned vectors so cosine similarity to
     # [1,0,0,0] gives a clean ranking: 1.0, 0.0, 0.0.
     vectors = np.eye(3, EMBED_DIM, dtype=np.float32)
+    identity16 = np.eye(4, dtype=np.float32).reshape(16).tolist()
 
     db_dir = tmp_path / "lancedb"
     db = connect(db_dir)
@@ -123,7 +140,8 @@ def populated_db(tmp_path, tiny_image_files):
         pa.field("collection_id", pa.string()),
         pa.field("vector", pa.list_(pa.float32(), EMBED_DIM)),
         pa.field("path", pa.string()),
-        pa.field("timestamp", pa.float64()),
+        pa.field("depth_path", pa.string()),
+        pa.field("cam2world", pa.list_(pa.float32())),
     ])
     table = db.create_table("coll", schema=schema)
     rows = [
@@ -132,19 +150,36 @@ def populated_db(tmp_path, tiny_image_files):
             "collection_id": "coll",
             "vector": vectors[i].tolist(),
             "path": paths[i],
-            "timestamp": 0.0,
+            "depth_path": depth_paths[i],
+            "cam2world": identity16,
         }
         for i in range(3)
     ]
     table.add(rows)
     ids = [r["id"] for r in rows]
 
+    intrinsics = {"fx": 4.0, "fy": 4.0, "cx": 4.0, "cy": 4.0}
+    depth_scale = 1000.0
+    meta_schema = pa.schema([
+        pa.field("collection_id", pa.string()),
+        pa.field("fx", pa.float64()),
+        pa.field("fy", pa.float64()),
+        pa.field("cx", pa.float64()),
+        pa.field("cy", pa.float64()),
+        pa.field("depth_scale", pa.float64()),
+    ])
+    meta = db.create_table("_collection_meta", schema=meta_schema)
+    meta.add([{"collection_id": "coll", **intrinsics, "depth_scale": depth_scale}])
+
     return {
         "db": db,
         "collection_id": "coll",
         "ids": ids,
         "paths": paths,
+        "depth_paths": depth_paths,
         "vectors": vectors,
+        "intrinsics": intrinsics,
+        "depth_scale": depth_scale,
     }
 
 
