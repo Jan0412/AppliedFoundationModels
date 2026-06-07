@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "accelerate>=1.0.0",
+    "dbscan>=0.0.12",
     "huggingface-hub>=1.16.1",
     "jupyterlab>=4.5.7",
     "k3d>=2.17.0",
@@ -14,6 +15,7 @@ dependencies = [
     "matplotlib>=3.10.9",
     "plotly>=6.7.0",
     "pyyaml>=6.0",
+    "scikit-learn>=1.9.0",
     "torchvision>=0.27.0",
     "tqdm>=4.66",
     "transformers>=5.9.0",
