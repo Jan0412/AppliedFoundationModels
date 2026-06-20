@@ -35,7 +35,8 @@ class ViSTASLAMReconstructor(BaseReconstructor):
         abs_output.mkdir(parents=True, exist_ok=True)
 
         # 2. Append the required glob pattern for the ViSTA-SLAM data loader
-        image_pattern = f"{abs_input}/*.png"
+        image_pattern = f"{abs_input}/*.jpg"    # scannet
+        # image_pattern = f"{abs_input}/*.png"    # tum_rgbd
 
         # 3. Assemble the explicit CLI execution command array
         cmd = [
