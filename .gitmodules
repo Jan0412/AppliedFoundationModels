@@ -1,0 +1,3 @@
+[submodule "external/vggt-omega"]
+	path = external/vggt-omega
+	url = git@github.com:facebookresearch/vggt-omega.git
