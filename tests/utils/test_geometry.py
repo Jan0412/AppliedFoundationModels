@@ -8,7 +8,6 @@ from PIL import Image
 from src.utils.geometry import (
     aabb_corners,
     backproject,
-    box_to_mask,
     build_scene_cloud,
     largest_cluster,
     quat_to_cam2world,
@@ -147,31 +146,6 @@ def test_backproject_scales_color_indices_when_resolutions_differ(tmp_path):
     assert colors is not None
     # col=1 in depth (W=2) → col=2 in RGB (W=4): factor 4/2=2
     assert list(colors[0]) == [99, 88, 77]
-
-
-# ---------------------------------------------------------------------------
-# box_to_mask
-# ---------------------------------------------------------------------------
-
-
-def test_box_to_mask_fills_rectangle():
-    mask = box_to_mask([1, 2, 4, 5], height=8, width=8)
-    assert mask.shape == (8, 8)
-    assert mask.sum() == (4 - 1) * (5 - 2)            # width 3 * height 3
-    assert mask[2, 1] and mask[4, 3]
-    assert not mask[0, 0] and not mask[5, 4]          # exclusive upper edge
-
-
-def test_box_to_mask_clamps_to_bounds():
-    mask = box_to_mask([-5, -5, 100, 100], height=4, width=6)
-    assert mask.all()                                 # whole image covered
-
-
-def test_box_to_mask_rounds_floats_outward():
-    mask = box_to_mask([0.4, 0.4, 1.6, 1.6], height=4, width=4)
-    # floor(0.4)=0, ceil(1.6)=2 → rows/cols 0..1
-    assert mask[0, 0] and mask[1, 1]
-    assert not mask[2, 2]
 
 
 # ---------------------------------------------------------------------------

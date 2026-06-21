@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from langchain_core.runnables import Runnable, RunnableConfig
+from tqdm import tqdm
 
 from src.data_model import DetectedImage, SearchState
 
@@ -48,9 +49,9 @@ class Detect(Runnable):
             )
 
         detected: list[DetectedImage] = []
-        for ri in state.retrieved:
+        for ri in tqdm(state.retrieved, desc="Segmenting frames", unit="frame"):
             out = self.detector.invoke({"image": ri.image, "text": state.query})
-            scores = out["scores"]
+            scores = out["scores"].cpu()
             score = float(scores.max()) if scores.numel() > 0 else 0.0
             detected.append(
                 DetectedImage(
@@ -58,9 +59,9 @@ class Detect(Runnable):
                     path=ri.path,
                     similarity_score=ri.similarity_score,
                     detection_score=score,
-                    boxes=out["boxes"],
+                    boxes=out["boxes"].cpu(),
                     scores=scores,
-                    masks=list(out["masks"]) if "masks" in out else None,
+                    masks=[m.cpu() for m in out["masks"]] if "masks" in out else None,
                     labels=list(out["labels"]) if "labels" in out else None,
                     depth_path=ri.depth_path,
                     cam2world=ri.cam2world,

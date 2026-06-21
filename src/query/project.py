@@ -9,13 +9,11 @@ from typing import Any, Optional, Tuple
 import numpy as np
 import torch
 from langchain_core.runnables import Runnable, RunnableConfig
-from PIL import Image
 
 from src.data_model import ProjectedObject, SearchState
 from src.utils.db import load_collection_meta
 from src.utils.geometry import (
     backproject,
-    box_to_mask,
     largest_cluster,
     robust_bounds,
     voxel_downsample,
@@ -27,19 +25,17 @@ logger = logging.getLogger(__name__)
 class ProjectTo3D(Runnable):
     """Back-project the final results and fuse them into one tight 3D object.
 
-    Each hit contributes pixels — the best **mask** if the detector produced
-    masks (SAM), otherwise the best 2D **box** rasterised to a rectangle (e.g.
-    Grounding DINO) — which are back-projected to world space using the per-row
-    ``cam2world`` pose and the per-collection intrinsics + ``depth_scale`` (read
-    from the LanceDB metadata table written at index time).
+    Each hit contributes the pixels of its best **mask** (produced by SAM3),
+    which are back-projected to world space using the per-row ``cam2world``
+    pose and the per-collection intrinsics + ``depth_scale`` (read from the
+    LanceDB metadata table written at index time).
 
     Points from **all** hits are then merged and run through DBSCAN. The object
     is consistent across frames and forms the dominant dense cluster, while the
     per-frame background (different from each viewpoint) scatters into noise and
-    is dropped. This is what lets a box-only detector still yield a *tight* box:
-    multi-frame consensus separates object from background. The largest cluster
-    becomes a single fused :class:`ProjectedObject` (cleaned cloud + axis-aligned
-    world box).
+    is dropped: multi-frame consensus separates object from background. The
+    largest cluster becomes a single fused :class:`ProjectedObject` (cleaned
+    cloud + axis-aligned world box).
 
     The collection must have been indexed with depth + poses + calibration.
 
@@ -80,23 +76,13 @@ class ProjectTo3D(Runnable):
     def _select_mask(hit) -> Optional[np.ndarray]:
         """Return the boolean source mask for *hit*, or ``None`` if it has none.
 
-        Prefers the highest-scoring segmentation mask; falls back to rasterising
-        the highest-scoring 2D box (so box-only detectors are supported).
+        Uses the highest-scoring segmentation mask (SAM3 always produces masks).
         """
-        if hit.masks:
-            best = int(torch.as_tensor(hit.scores).argmax()) if len(hit.masks) > 1 else 0
-            mask = hit.masks[best]
-            return mask.cpu().numpy() if hasattr(mask, "cpu") else np.asarray(mask)
-
-        boxes = getattr(hit, "boxes", None)
-        if boxes is None or len(boxes) == 0:
+        if not hit.masks:
             return None
-        boxes_np = boxes.cpu().numpy() if hasattr(boxes, "cpu") else np.asarray(boxes)
-        best = int(torch.as_tensor(hit.scores).argmax()) if len(boxes_np) > 1 else 0
-        # Box coordinates are in detection (RGB) space; backproject resizes the
-        # mask to depth resolution when they differ.
-        w, h = Image.open(hit.path).size
-        return box_to_mask(boxes_np[best], h, w)
+        best = int(torch.as_tensor(hit.scores).argmax()) if len(hit.masks) > 1 else 0
+        mask = hit.masks[best]
+        return mask.cpu().numpy() if hasattr(mask, "cpu") else np.asarray(mask)
 
     def invoke(
         self,
@@ -130,7 +116,7 @@ class ProjectTo3D(Runnable):
             mask_np = self._select_mask(hit)
             if mask_np is None:
                 warnings.warn(
-                    f"ProjectTo3D: skipping '{hit.id}' — no masks or boxes to "
+                    f"ProjectTo3D: skipping '{hit.id}' — no mask to "
                     "back-project.",
                     stacklevel=2,
                 )

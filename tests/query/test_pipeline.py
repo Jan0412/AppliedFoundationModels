@@ -144,24 +144,6 @@ def test_from_config_default_detector_is_sam(
     assert db_dir.exists()
 
 
-def test_from_config_grounding_dino(
-    tmp_path, mock_siglip_model, mock_dino_model
-):
-    db_dir = tmp_path / "lancedb_from_cfg"
-    cfg_path = _write_cfg(tmp_path, db_dir)
-
-    with patch(
-        "src.query.pipeline.SigLIPModel.from_config",
-        return_value=mock_siglip_model,
-    ), patch(
-        "src.query.pipeline.GroundingDINOModel.from_config",
-        return_value=mock_dino_model,
-    ):
-        pipeline = Search2D.from_config(cfg_path, detector="grounding_dino")
-
-    assert pipeline.detect.detector is mock_dino_model
-
-
 def test_from_config_rejects_unknown_detector(tmp_path, mock_siglip_model):
     cfg_path = _write_cfg(tmp_path, tmp_path / "db")
 
@@ -197,25 +179,3 @@ def test_invoke_state_takes_precedence_over_kwargs(pipeline, populated_db):
 def test_invoke_requires_collection_id_when_no_state(pipeline):
     with pytest.raises(ValueError, match="SearchState"):
         pipeline.invoke(query="anything")  # missing collection_id
-
-
-def test_end_to_end_with_dino_detector(
-    mock_siglip_model, mock_dino_model, populated_db
-):
-    """Smoke test: pipeline runs with a DINO-shaped detector."""
-    pipeline = Search2D(
-        siglip=mock_siglip_model,
-        detector=mock_dino_model,
-        db=populated_db["db"],
-    )
-    out = pipeline.invoke(
-        query="anything",
-        collection_id=populated_db["collection_id"],
-        top_k_retrieve=3,
-        top_k_final=2,
-    )
-    assert all(r.labels is not None for r in out.results)
-    assert all(r.masks is None for r in out.results)
-    # Box-only detector still yields 3D boxes via the box back-projection path.
-    assert out.projected is not None and len(out.projected) >= 1
-    assert all(p.bbox is not None for p in out.projected)

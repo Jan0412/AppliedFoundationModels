@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional
 
 import yaml
 
 from src.data_model import SearchState
-from src.models import GroundingDINOModel, SAMModel, SigLIPModel
+from src.models import SAMModel, SigLIPModel
 from src.utils.db import connect as _db_connect
 
 from .detect import Detect
@@ -16,9 +16,6 @@ from .embed import EmbedQuery
 from .project import ProjectTo3D
 from .rerank import RerankByDetection
 from .retrieve import RetrieveSimilar
-
-
-Detector = Union[SAMModel, GroundingDINOModel]
 
 
 class Search2D:
@@ -37,14 +34,14 @@ class Search2D:
     the 3D world point cloud (``state.projected``); it requires the SAM
     detector and a collection indexed with depth + poses + calibration.
 
-    The detector is one of :class:`SAMModel` or :class:`GroundingDINOModel`
-    (both share the ``invoke({"image": pil, "text": str}) -> dict``
-    contract). Internally :class:`Detect` is duck-typed, so any new wrapper
-    that satisfies the same contract can be passed as well.
+    The detector is :class:`SAMModel` (SAM3), exposing the
+    ``invoke({"image": pil, "text": str}) -> dict`` contract. Internally
+    :class:`Detect` is duck-typed, so any wrapper that satisfies the same
+    contract can still be passed directly to the constructor.
 
     Example::
 
-        pipeline = Search2D.from_config("config.yaml", detector="grounding_dino")
+        pipeline = Search2D.from_config("config.yaml")
         state = pipeline.invoke(query="laptop on desk",
                                 collection_id="fr1_desk",
                                 top_k_retrieve=20,
@@ -56,7 +53,7 @@ class Search2D:
     def __init__(
         self,
         siglip: SigLIPModel,
-        detector: Detector,
+        detector: SAMModel,
         db,
     ) -> None:
         self.embed = EmbedQuery(siglip)
@@ -79,25 +76,20 @@ class Search2D:
 
         Args:
             path:     Path to the YAML configuration file.
-            detector: Which detector to wire — ``"sam"`` (default) or
-                      ``"grounding_dino"``. Both models read their own
-                      sections of the same YAML file.
+            detector: Which detector to wire — only ``"sam"`` (SAM3) is
+                      supported; any other value raises ``ValueError``.
 
-        Reads ``indexing.db_path`` for the LanceDB store; SAM, DINO, and
-        SigLIP load their own sections via their respective
-        ``from_config`` classmethods.
+        Reads ``indexing.db_path`` for the LanceDB store; SAM and SigLIP load
+        their own sections via their respective ``from_config`` classmethods.
         """
         cfg = yaml.safe_load(Path(path).read_text())
         siglip = SigLIPModel.from_config(path)
-        if detector == "sam":
-            det: Detector = SAMModel.from_config(path)
-        elif detector == "grounding_dino":
-            det = GroundingDINOModel.from_config(path)
-        else:
+        if detector != "sam":
             raise ValueError(
                 f"Search2D.from_config: unknown detector {detector!r}. "
-                "Expected 'sam' or 'grounding_dino'."
+                "Expected 'sam'."
             )
+        det = SAMModel.from_config(path)
         db = _db_connect(cfg["indexing"]["db_path"])
         return cls(siglip=siglip, detector=det, db=db)
 

@@ -103,8 +103,7 @@ class ProjectedObject(BaseModel):
     Attributes:
         id:     LanceDB row id of the source frame.
         path:   Source RGB image path.
-        points: ``(N, 3)`` float array of world-space XYZ for the masked pixels
-                (or box-region pixels when the detector gave only a 2D box).
+        points: ``(N, 3)`` float array of world-space XYZ for the masked pixels.
         colors: ``(N, 3)`` ``uint8`` RGB sampled at those pixels, or ``None``.
         bbox:   ``(2, 3)`` axis-aligned world box ``[[min],[max]]`` over the
                 points (robust-percentile trimmed), or ``None`` if no points.

@@ -63,22 +63,6 @@ def test_fuses_multiple_frames_into_one_object(populated_db):
     assert out.projected[0].points.shape[0] >= 1
 
 
-def test_projects_box_only_detection(populated_db):
-    # masks=None but a full-frame box → box path rasterises it and projects.
-    di = _detected(populated_db, masks_none=True)
-    out = _projector(populated_db).invoke(_state(populated_db, [di]))
-    obj = out.projected[0]
-    assert obj.points.shape == (64, 3)        # full-frame box → all pixels
-    assert obj.bbox is not None and obj.bbox.shape == (2, 3)
-
-
-def test_box_only_smaller_box_projects_fewer_points(populated_db):
-    box = torch.tensor([[1.0, 2.0, 4.0, 5.0]])   # width 3 * height 3 = 9 px
-    di = _detected(populated_db, masks_none=True, boxes=box)
-    out = _projector(populated_db).invoke(_state(populated_db, [di]))
-    assert out.projected[0].points.shape == (9, 3)
-
-
 def test_falls_back_to_detected_when_no_results(populated_db):
     di = _detected(populated_db)
     state = SearchState(
@@ -95,10 +79,10 @@ def test_missing_calibration_raises(populated_db):
         _projector(populated_db).invoke(state)
 
 
-def test_skips_results_without_masks_or_boxes(populated_db):
-    # Neither masks nor boxes → nothing to back-project → empty fused result.
-    di = _detected(populated_db, masks_none=True, boxes=torch.zeros(0, 4))
-    with pytest.warns(UserWarning, match="no masks or boxes"):
+def test_skips_results_without_mask(populated_db):
+    # No mask → nothing to back-project → empty fused result.
+    di = _detected(populated_db, masks_none=True)
+    with pytest.warns(UserWarning, match="no mask"):
         out = _projector(populated_db).invoke(_state(populated_db, [di]))
     assert out.projected == []
 

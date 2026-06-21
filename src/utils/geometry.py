@@ -114,33 +114,6 @@ def backproject(
     return pts_w.astype(np.float32), colors
 
 
-def box_to_mask(box, height: int, width: int) -> np.ndarray:
-    """Rasterise a 2D bounding box into a boolean mask.
-
-    Lets the box-only detection path (e.g. Grounding DINO) reuse
-    :func:`backproject`: build a rectangular mask, then back-project it.
-
-    Args:
-        box:    ``[x0, y0, x1, y1]`` in pixel coordinates (floats accepted).
-        height: Mask height (match the depth image).
-        width:  Mask width (match the depth image).
-
-    Returns:
-        A ``(height, width)`` boolean array, True inside the (clamped) box.
-    """
-    x0, y0, x1, y1 = (float(v) for v in box)
-    xa, xb = sorted((x0, x1))
-    ya, yb = sorted((y0, y1))
-    xa_i = max(0, int(np.floor(xa)))
-    ya_i = max(0, int(np.floor(ya)))
-    xb_i = min(width, int(np.ceil(xb)))
-    yb_i = min(height, int(np.ceil(yb)))
-    mask = np.zeros((height, width), dtype=bool)
-    if xb_i > xa_i and yb_i > ya_i:
-        mask[ya_i:yb_i, xa_i:xb_i] = True
-    return mask
-
-
 def robust_bounds(
     points: np.ndarray,
     lo: float = 2.0,
