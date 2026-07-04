@@ -222,6 +222,104 @@ def aabb_corners(bbox: np.ndarray) -> np.ndarray:
     ], dtype=np.float32)
 
 
+def central_depth(
+    depth_path: str | Path,
+    depth_scale: float,
+    patch_frac: float = 0.2,
+) -> Optional[float]:
+    """Robust metric depth at the centre of a frame.
+
+    Reads the 16-bit depth PNG (same convention as :func:`backproject`) and
+    returns the median of the valid (``> 0``) depths inside a centred patch
+    whose edges are ``patch_frac`` of the image edges. The median makes the
+    estimate robust to depth holes and thin foreground clutter.
+
+    Args:
+        depth_path:  Path to the (16-bit) depth PNG, in raw units.
+        depth_scale: Divisor converting raw depth units to metres.
+        patch_frac:  Patch edge length as a fraction of the image edge
+                     (clamped to at least 1 pixel).
+
+    Returns:
+        Median depth in metres, or ``None`` when the patch holds no valid
+        depth pixels.
+    """
+    depth = np.asarray(Image.open(depth_path), dtype=np.float32) / float(depth_scale)
+    h, w = depth.shape
+    ph = max(1, int(h * patch_frac))
+    pw = max(1, int(w * patch_frac))
+    y0 = (h - ph) // 2
+    x0 = (w - pw) // 2
+    patch = depth[y0:y0 + ph, x0:x0 + pw]
+    valid = patch[patch > 0]
+    if valid.size == 0:
+        return None
+    return float(np.median(valid))
+
+
+def lookat_point(cam2world: np.ndarray, depth_m: float) -> np.ndarray:
+    """World-space point a camera is looking at.
+
+    Approximates the observed surface point along the optical axis::
+
+        lookat = camera_center + optical_axis * depth_m
+
+    where ``camera_center = cam2world[:3, 3]`` and ``optical_axis =
+    cam2world[:3, 2]`` — the world-space camera +Z, the same axis
+    :func:`backproject` treats as depth.
+
+    Args:
+        cam2world: ``(4, 4)`` camera-to-world pose.
+        depth_m:   Distance along the optical axis in metres (e.g. from
+                   :func:`central_depth`).
+
+    Returns:
+        ``(3,)`` ``float32`` world XYZ.
+    """
+    M = np.asarray(cam2world, dtype=np.float32)
+    return (M[:3, 3] + M[:3, 2] * float(depth_m)).astype(np.float32)
+
+
+def farthest_point_sampling(
+    directions: np.ndarray,
+    seed_idx: int,
+    n: int,
+) -> list[int]:
+    """Greedy k-center selection on angular distance between unit vectors.
+
+    Starting from ``seed_idx``, repeatedly adds the vector with the largest
+    angle to its nearest already-selected vector — the classic 2-approximation
+    of the max-min dispersion (p-dispersion) objective. Duplicated directions
+    are never picked twice while distinct ones remain.
+
+    Args:
+        directions: ``(N, 3)`` unit vectors.
+        seed_idx:   Index of the first selected vector.
+        n:          Number of vectors to select.
+
+    Returns:
+        ``min(n, N)`` indices into *directions*, seed first.
+    """
+    dirs = np.asarray(directions, dtype=np.float32)
+    n_total = len(dirs)
+    if n_total == 0 or n <= 0:
+        return []
+
+    selected = [int(seed_idx)]
+    # Angle of every vector to its nearest selected vector.
+    min_angle = np.arccos(np.clip(dirs @ dirs[seed_idx], -1.0, 1.0))
+    min_angle[seed_idx] = -np.inf
+
+    while len(selected) < min(n, n_total):
+        nxt = int(np.argmax(min_angle))
+        selected.append(nxt)
+        angles = np.arccos(np.clip(dirs @ dirs[nxt], -1.0, 1.0))
+        min_angle = np.minimum(min_angle, angles)
+        min_angle[nxt] = -np.inf
+
+    return selected
+
+
 def build_scene_cloud(
     fs,
     n_frames: int = 250,

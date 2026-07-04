@@ -29,7 +29,8 @@ class Detect(Runnable):
     fall to the bottom but are not silently dropped — that's the rerank
     step's job).
 
-    Pre:  ``state.retrieved`` is set.
+    Pre:  ``state.retrieved`` is set. Images may still be unloaded — they
+          are loaded (and cached) on demand via ``RetrievedImage.load_image``.
     Post: ``state.detected`` is a list of :class:`DetectedImage`, same
           order as ``state.retrieved`` (no sorting, no trimming).
     """
@@ -50,7 +51,7 @@ class Detect(Runnable):
 
         detected: list[DetectedImage] = []
         for ri in tqdm(state.retrieved, desc="Segmenting frames", unit="frame"):
-            out = self.detector.invoke({"image": ri.image, "text": state.query})
+            out = self.detector.invoke({"image": ri.load_image(), "text": state.query})
             scores = out["scores"].cpu()
             score = float(scores.max()) if scores.numel() > 0 else 0.0
             detected.append(

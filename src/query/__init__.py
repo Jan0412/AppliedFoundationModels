@@ -16,12 +16,13 @@ Usage::
 Every step is a ``Runnable[SearchState, SearchState]``, so partial chains
 work out of the box::
 
-    chain = pipeline.embed | pipeline.retrieve | pipeline.detect
+    chain = pipeline.embed | pipeline.retrieve | pipeline.select | pipeline.detect
 """
 
 from src.data_model import (
     DetectedImage,
     ProjectedObject,
+    RetrievalDiagnostics,
     RetrievedImage,
     SearchState,
 )
@@ -32,15 +33,18 @@ from .pipeline import Search2D
 from .project import ProjectTo3D
 from .rerank import RerankByDetection
 from .retrieve import RetrieveSimilar
+from .select import SelectDiverse
 
 __all__ = [
     "Search2D",
     "SearchState",
+    "RetrievalDiagnostics",
     "RetrievedImage",
     "DetectedImage",
     "ProjectedObject",
     "EmbedQuery",
     "RetrieveSimilar",
+    "SelectDiverse",
     "Detect",
     "RerankByDetection",
     "ProjectTo3D",
