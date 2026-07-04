@@ -15,6 +15,7 @@ from src.query import (
     RerankByDetection,
     RetrieveSimilar,
     Search2D,
+    SelectDiverse,
 )
 
 
@@ -33,6 +34,7 @@ def test_invoke_runs_full_chain_with_kwargs(pipeline, populated_db):
         collection_id=populated_db["collection_id"],
         top_k_retrieve=3,
         top_k_final=2,
+        retrieval_mode="topk",
     )
 
     assert out.query_embedding is not None
@@ -62,7 +64,7 @@ def test_invoke_requires_query_or_state(pipeline):
 
 
 def test_partial_chain_without_rerank(pipeline, mock_sam_model, populated_db):
-    """The step-instances are public so callers can build a 3-step chain."""
+    """The step-instances are public so callers can build a partial chain."""
     # Vary the scores so we can verify detected order is preserved (not sorted).
     score_seq = [torch.tensor([0.1]), torch.tensor([0.9]), torch.tensor([0.5])]
     mock_sam_model.invoke.side_effect = [
@@ -74,6 +76,7 @@ def test_partial_chain_without_rerank(pipeline, mock_sam_model, populated_db):
         query="anything",
         collection_id=populated_db["collection_id"],
         top_k_retrieve=3,
+        retrieval_mode="topk",
     )
     out = chain.invoke(state)
 
@@ -91,6 +94,7 @@ def test_pipeline_chain_is_runnable_sequence(pipeline):
 def test_init_wires_each_step_with_correct_type(pipeline):
     assert isinstance(pipeline.embed, EmbedQuery)
     assert isinstance(pipeline.retrieve, RetrieveSimilar)
+    assert isinstance(pipeline.select, SelectDiverse)
     assert isinstance(pipeline.detect, Detect)
     assert isinstance(pipeline.rerank, RerankByDetection)
 
@@ -106,9 +110,46 @@ def test_init_injects_dependencies_into_steps(
     assert pipeline.embed.siglip is mock_siglip_model
     assert pipeline.detect.detector is mock_sam_model
     assert pipeline.retrieve.db is populated_db["db"]
+    assert pipeline.select.db is populated_db["db"]
 
 
-def _write_cfg(tmp_path, db_dir):
+def test_default_retrieval_mode_is_dynamic(pipeline):
+    assert pipeline.retrieve.mode == "dynamic"
+
+
+def test_invoke_dynamic_mode_selects_diverse_subset(
+    mock_siglip_model, mock_sam_model, db_with_sims
+):
+    """Dynamic pool → viewpoint selection → detector sees only n_diverse frames."""
+    sims = (
+        [0.85 + 0.008 * i for i in range(12)]     # relevant cluster
+        + [0.05 + 0.002 * i for i in range(48)]   # background
+    )
+    dyn = db_with_sims(sims)
+    pipeline = Search2D(
+        siglip=mock_siglip_model,
+        detector=mock_sam_model,
+        db=dyn["db"],
+        strategy="plain",
+        min_k=2,
+        n_diverse=4,
+    )
+
+    out = pipeline.invoke(
+        query="anything", collection_id=dyn["collection_id"], top_k_final=3
+    )
+
+    assert len(out.retrieved) == 4
+    assert mock_sam_model.invoke.call_count == 4
+    assert len(out.results) == 3
+    diag = out.retrieval_diag
+    assert diag.mode == "dynamic"
+    assert diag.pool_size == 12
+    assert diag.n_selected == 4
+    assert len(diag.selected_ids) == 4
+
+
+def _write_cfg(tmp_path, db_dir, query_section=None):
     cfg = {
         "models": {
             "siglip": {"model_id": "x", "device": "cpu", "batch_size": 1},
@@ -119,6 +160,8 @@ def _write_cfg(tmp_path, db_dir):
         },
         "indexing": {"db_path": str(db_dir)},
     }
+    if query_section is not None:
+        cfg["query"] = query_section
     p = tmp_path / "config.yaml"
     p.write_text(yaml.dump(cfg))
     return p
@@ -142,6 +185,62 @@ def test_from_config_default_detector_is_sam(
     assert pipeline.embed.siglip is mock_siglip_model
     assert pipeline.detect.detector is mock_sam_model
     assert db_dir.exists()
+
+
+def test_from_config_without_query_section_uses_defaults(
+    tmp_path, mock_siglip_model, mock_sam_model
+):
+    cfg_path = _write_cfg(tmp_path, tmp_path / "db")
+
+    with patch(
+        "src.query.pipeline.SigLIPModel.from_config",
+        return_value=mock_siglip_model,
+    ), patch(
+        "src.query.pipeline.SAMModel.from_config",
+        return_value=mock_sam_model,
+    ):
+        pipeline = Search2D.from_config(cfg_path)
+
+    assert pipeline.retrieve.mode == "dynamic"
+    assert pipeline.retrieve.min_k == 10
+    assert pipeline.retrieve.max_k == 400
+    assert pipeline.retrieve.strategy == "tail"
+    assert pipeline.select.n_diverse == 10
+
+
+def test_from_config_reads_query_section(
+    tmp_path, mock_siglip_model, mock_sam_model
+):
+    cfg_path = _write_cfg(
+        tmp_path,
+        tmp_path / "db",
+        query_section={
+            "retrieval_mode": "topk",
+            "strategy": "plain",
+            "min_k": 3,
+            "max_k": 50,
+            "min_separability": 0.8,
+            "n_diverse": 7,
+            "patch_frac": 0.3,
+        },
+    )
+
+    with patch(
+        "src.query.pipeline.SigLIPModel.from_config",
+        return_value=mock_siglip_model,
+    ), patch(
+        "src.query.pipeline.SAMModel.from_config",
+        return_value=mock_sam_model,
+    ):
+        pipeline = Search2D.from_config(cfg_path)
+
+    assert pipeline.retrieve.mode == "topk"
+    assert pipeline.retrieve.strategy == "plain"
+    assert pipeline.retrieve.min_k == 3
+    assert pipeline.retrieve.max_k == 50
+    assert pipeline.retrieve.min_separability == 0.8
+    assert pipeline.select.n_diverse == 7
+    assert pipeline.select.patch_frac == 0.3
 
 
 def test_from_config_rejects_unknown_detector(tmp_path, mock_siglip_model):
@@ -170,6 +269,7 @@ def test_invoke_state_takes_precedence_over_kwargs(pipeline, populated_db):
         collection_id=populated_db["collection_id"],
         top_k_retrieve=2,
         top_k_final=1,
+        retrieval_mode="topk",
     )
     out = pipeline.invoke(state, top_k_retrieve=99, top_k_final=99)
     assert len(out.retrieved) == 2

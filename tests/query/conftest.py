@@ -10,6 +10,12 @@ Provides:
                             with known vectors + image paths, plus the connection.
 - ``detected_factory``    — builds list[DetectedImage] with given scores, for
                             the rerank step's pure-logic tests.
+- ``pose_looking_at``     — 4x4 cam2world builder whose +Z column aims at a target.
+- ``db_with_sims``        — factory for a real LanceDB collection with exact
+                            cosine similarities and circle-pose geometry.
+- ``pool_from``           — factory for a retrieval pool (images unloaded)
+                            with circle poses + depth maps, no DB involved.
+- ``meta_db``             — factory for a store holding only ``_collection_meta``.
 """
 
 from __future__ import annotations
@@ -221,5 +227,180 @@ def retrieved_from(tiny_image_files):
             )
             for i in range(n)
         ]
+
+    return _make
+
+
+def _pose_looking_at(cam_pos, target) -> np.ndarray:
+    """4x4 cam2world whose optical axis (+Z column) points at *target*."""
+    cam_pos = np.asarray(cam_pos, dtype=np.float32)
+    z = np.asarray(target, dtype=np.float32) - cam_pos
+    z = z / np.linalg.norm(z)
+    up = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+    if abs(float(np.dot(up, z))) > 0.99:
+        up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    x = np.cross(up, z)
+    x = x / np.linalg.norm(x)
+    y = np.cross(z, x)
+    M = np.eye(4, dtype=np.float32)
+    M[:3, 0], M[:3, 1], M[:3, 2], M[:3, 3] = x, y, z, cam_pos
+    return M
+
+
+@pytest.fixture
+def pose_looking_at():
+    """Expose the pose-builder helper to tests."""
+    return _pose_looking_at
+
+
+def _circle_positions(n: int) -> list[np.ndarray]:
+    """n camera positions evenly spaced on the unit circle in the XY plane."""
+    return [
+        np.array([np.cos(a), np.sin(a), 0.0], dtype=np.float32)
+        for a in 2.0 * np.pi * np.arange(n) / max(n, 1)
+    ]
+
+
+def _write_depths(dir_path: Path, values: list[int], size: int = 8) -> list[str]:
+    """One constant-value 16-bit depth PNG per entry in *values*."""
+    dir_path.mkdir(parents=True, exist_ok=True)
+    out = []
+    for i, v in enumerate(values):
+        p = dir_path / f"{i:03d}.png"
+        Image.fromarray(np.full((size, size), v, dtype=np.uint16)).save(p)
+        out.append(str(p))
+    return out
+
+
+@pytest.fixture
+def db_with_sims(tmp_path, tiny_image_files):
+    """Factory: real LanceDB collection with exact cosine similarities + geometry.
+
+    ``_make(sims)`` writes one row per similarity ``s`` with vector
+    ``[s, sqrt(1-s²), 0, 0]`` — cosine to the mock query ``[1,0,0,0]`` is
+    exactly ``s``. Each row gets a constant 1.0 m depth map and a pose on the
+    unit circle looking at the origin (so every look-at point is the origin
+    and viewing directions are the radial directions). ``_collection_meta``
+    is written like the indexer would.
+    """
+
+    def _make(sims: list[float], collection_id: str = "dyncoll") -> dict:
+        n = len(sims)
+        paths = tiny_image_files(n)
+        depth_paths = _write_depths(tmp_path / f"depth_{collection_id}", [1000] * n)
+        positions = _circle_positions(n)
+
+        db = connect(tmp_path / f"lancedb_{collection_id}")
+        schema = pa.schema([
+            pa.field("id", pa.string()),
+            pa.field("collection_id", pa.string()),
+            pa.field("vector", pa.list_(pa.float32(), EMBED_DIM)),
+            pa.field("path", pa.string()),
+            pa.field("depth_path", pa.string()),
+            pa.field("cam2world", pa.list_(pa.float32())),
+        ])
+        table = db.create_table(collection_id, schema=schema)
+        rows = [
+            {
+                "id": f"id-{i}",
+                "collection_id": collection_id,
+                "vector": [float(s), float(np.sqrt(1.0 - s * s)), 0.0, 0.0],
+                "path": paths[i],
+                "depth_path": depth_paths[i],
+                "cam2world": _pose_looking_at(positions[i], (0, 0, 0))
+                .reshape(16)
+                .tolist(),
+            }
+            for i, s in enumerate(sims)
+        ]
+        if rows:
+            table.add(rows)
+
+        meta_schema = pa.schema([
+            pa.field("collection_id", pa.string()),
+            pa.field("fx", pa.float64()),
+            pa.field("fy", pa.float64()),
+            pa.field("cx", pa.float64()),
+            pa.field("cy", pa.float64()),
+            pa.field("depth_scale", pa.float64()),
+        ])
+        meta = db.create_table("_collection_meta", schema=meta_schema)
+        meta.add([{
+            "collection_id": collection_id,
+            "fx": 4.0, "fy": 4.0, "cx": 4.0, "cy": 4.0,
+            "depth_scale": 1000.0,
+        }])
+
+        return {
+            "db": db,
+            "collection_id": collection_id,
+            "ids": [r["id"] for r in rows],
+            "paths": paths,
+            "depth_paths": depth_paths,
+            "sims": np.asarray(sims, dtype=np.float32),
+        }
+
+    return _make
+
+
+@pytest.fixture
+def pool_from(tmp_path, tiny_image_files):
+    """Factory: list[RetrievedImage] pool (images unloaded) with real geometry.
+
+    ``_make(sims)`` places cameras on the unit circle looking at the origin
+    and writes a constant 1.0 m depth PNG per frame. ``depth_values`` allows
+    per-frame overrides (raw uint16 units, scale 1000). Frames are returned
+    in the given order — pass *sims* descending to mimic retrieval output.
+    """
+
+    counter = {"i": 0}
+
+    def _make(sims: list[float], depth_values: list[int] | None = None) -> list[RetrievedImage]:
+        n = len(sims)
+        counter["i"] += 1
+        paths = tiny_image_files(n)
+        depth_paths = _write_depths(
+            tmp_path / f"pool_depth_{counter['i']}", depth_values or [1000] * n
+        )
+        positions = _circle_positions(n)
+        return [
+            RetrievedImage(
+                id=f"id-{i}",
+                path=paths[i],
+                similarity_score=float(sims[i]),
+                image=None,
+                depth_path=depth_paths[i],
+                cam2world=_pose_looking_at(positions[i], (0, 0, 0)),
+            )
+            for i in range(n)
+        ]
+
+    return _make
+
+
+@pytest.fixture
+def meta_db(tmp_path):
+    """Factory: LanceDB store holding only a ``_collection_meta`` row."""
+
+    counter = {"i": 0}
+
+    def _make(collection_id: str = "coll", depth_scale: float = 1000.0):
+        counter["i"] += 1
+        db = connect(tmp_path / f"metadb_{collection_id}_{counter['i']}")
+        meta_schema = pa.schema([
+            pa.field("collection_id", pa.string()),
+            pa.field("fx", pa.float64()),
+            pa.field("fy", pa.float64()),
+            pa.field("cx", pa.float64()),
+            pa.field("cy", pa.float64()),
+            pa.field("depth_scale", pa.float64()),
+        ])
+        meta = db.create_table("_collection_meta", schema=meta_schema)
+        meta.add([{
+            "collection_id": collection_id,
+            "fx": 4.0, "fy": 4.0, "cx": 4.0, "cy": 4.0,
+            "depth_scale": depth_scale,
+        }])
+        return db
 
     return _make

@@ -9,7 +9,10 @@ from src.utils.geometry import (
     aabb_corners,
     backproject,
     build_scene_cloud,
+    central_depth,
+    farthest_point_sampling,
     largest_cluster,
+    lookat_point,
     quat_to_cam2world,
     robust_bounds,
     voxel_downsample,
@@ -305,3 +308,120 @@ def test_build_scene_cloud_empty_frameset():
     pts, cols = build_scene_cloud(_FS(), n_frames=10, voxel=0.02)
     assert pts.shape == (0, 3)
     assert cols is None
+
+
+# ---------------------------------------------------------------------------
+# central_depth
+# ---------------------------------------------------------------------------
+
+
+def test_central_depth_median_of_central_patch(tmp_path):
+    # 10x10 with patch_frac=0.2 → 2x2 patch at [4:6, 4:6].
+    depth = np.zeros((10, 10), dtype=np.uint16)
+    depth[4:6, 4:6] = [[1000, 2000], [3000, 4000]]
+    dpath = tmp_path / "d.png"
+    _write_depth(dpath, depth)
+
+    assert central_depth(dpath, depth_scale=1000.0, patch_frac=0.2) == 2.5
+
+
+def test_central_depth_excludes_zero_pixels(tmp_path):
+    depth = np.zeros((10, 10), dtype=np.uint16)
+    depth[4:6, 4:6] = [[0, 0], [2000, 4000]]
+    dpath = tmp_path / "d.png"
+    _write_depth(dpath, depth)
+
+    assert central_depth(dpath, depth_scale=1000.0, patch_frac=0.2) == 3.0
+
+
+def test_central_depth_ignores_pixels_outside_patch(tmp_path):
+    # Everything outside the central 2x2 screams 60 m; the patch says 1 m.
+    depth = np.full((10, 10), 60_000, dtype=np.uint16)
+    depth[4:6, 4:6] = 1000
+    dpath = tmp_path / "d.png"
+    _write_depth(dpath, depth)
+
+    assert central_depth(dpath, depth_scale=1000.0, patch_frac=0.2) == 1.0
+
+
+def test_central_depth_none_when_patch_has_no_valid_depth(tmp_path):
+    depth = np.full((10, 10), 3000, dtype=np.uint16)
+    depth[4:6, 4:6] = 0
+    dpath = tmp_path / "d.png"
+    _write_depth(dpath, depth)
+
+    assert central_depth(dpath, depth_scale=1000.0, patch_frac=0.2) is None
+
+
+def test_central_depth_patch_is_at_least_one_pixel(tmp_path):
+    # 2x2 image with patch_frac=0.2 → 1x1 patch at [0:1, 0:1].
+    depth = np.array([[1500, 0], [0, 0]], dtype=np.uint16)
+    dpath = tmp_path / "d.png"
+    _write_depth(dpath, depth)
+
+    assert central_depth(dpath, depth_scale=1000.0, patch_frac=0.2) == 1.5
+
+
+# ---------------------------------------------------------------------------
+# lookat_point
+# ---------------------------------------------------------------------------
+
+
+def test_lookat_point_identity_pose_is_along_z():
+    assert np.allclose(lookat_point(np.eye(4), 2.5), [0.0, 0.0, 2.5])
+
+
+def test_lookat_point_follows_rotated_axis_and_translation():
+    # Optical axis (+Z column) remapped to world +X, camera at (1, 2, 3).
+    M = np.eye(4, dtype=np.float32)
+    M[:3, 0] = [0, 1, 0]
+    M[:3, 1] = [0, 0, 1]
+    M[:3, 2] = [1, 0, 0]
+    M[:3, 3] = [1, 2, 3]
+
+    assert np.allclose(lookat_point(M, 2.0), [3.0, 2.0, 3.0])
+
+
+# ---------------------------------------------------------------------------
+# farthest_point_sampling
+# ---------------------------------------------------------------------------
+
+
+def _circle_dirs(n: int) -> np.ndarray:
+    angles = 2.0 * np.pi * np.arange(n) / n
+    return np.stack(
+        [np.cos(angles), np.sin(angles), np.zeros(n)], axis=1
+    ).astype(np.float32)
+
+
+def test_fps_picks_evenly_spread_directions():
+    # 8 directions every 45°; n=4 from seed 0 → exactly 0°, 90°, 180°, 270°.
+    picked = farthest_point_sampling(_circle_dirs(8), seed_idx=0, n=4)
+    assert picked[0] == 0
+    assert set(picked) == {0, 2, 4, 6}
+
+
+def test_fps_returns_all_when_n_exceeds_population():
+    picked = farthest_point_sampling(_circle_dirs(3), seed_idx=1, n=10)
+    assert picked[0] == 1
+    assert sorted(picked) == [0, 1, 2]
+
+
+def test_fps_prefers_distinct_over_duplicate_directions():
+    dirs = np.array(
+        [[1, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float32
+    )
+    picked = farthest_point_sampling(dirs, seed_idx=0, n=2)
+    assert picked == [0, 2]
+
+
+def test_fps_never_repeats_an_index():
+    dirs = np.array(
+        [[1, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float32
+    )
+    picked = farthest_point_sampling(dirs, seed_idx=0, n=3)
+    assert sorted(picked) == [0, 1, 2]
+
+
+def test_fps_empty_input_returns_empty():
+    assert farthest_point_sampling(np.empty((0, 3), dtype=np.float32), 0, 4) == []

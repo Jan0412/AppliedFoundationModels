@@ -129,6 +129,37 @@ def test_invoke_rejects_missing_retrieved(detector_flavor):
 # --- detector-specific output keys -----------------------------------------
 
 
+def test_lazy_loads_unloaded_images_from_path(mock_sam_model, tiny_image_files):
+    from PIL import Image
+
+    from src.data_model import RetrievedImage
+
+    (path,) = tiny_image_files(1)
+    retrieved = [
+        RetrievedImage(id="id-0", path=path, similarity_score=0.9, image=None)
+    ]
+    state = SearchState(query="q", collection_id="c", retrieved=retrieved)
+
+    Detect(mock_sam_model).invoke(state)
+
+    (payload,) = mock_sam_model.invoke.call_args.args
+    assert isinstance(payload["image"], Image.Image)
+    assert payload["image"].mode == "RGB"
+    assert retrieved[0].image is payload["image"]  # cached for later steps
+
+
+def test_unloaded_image_without_path_raises(mock_sam_model):
+    from src.data_model import RetrievedImage
+
+    retrieved = [
+        RetrievedImage(id="id-0", path="", similarity_score=0.9, image=None)
+    ]
+    state = SearchState(query="q", collection_id="c", retrieved=retrieved)
+
+    with pytest.raises(ValueError, match="no cached"):
+        Detect(mock_sam_model).invoke(state)
+
+
 def test_sam_path_populates_masks_not_labels(mock_sam_model, retrieved_from):
     retrieved = retrieved_from(1)
     state = SearchState(query="q", collection_id="c", retrieved=retrieved)
