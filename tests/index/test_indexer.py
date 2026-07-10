@@ -585,7 +585,7 @@ def test_insert_then_vector_search_returns_inserted_rows(indexer, make_image_fil
     # Use the embedding of the first row as the query — top hit must be itself.
     rows = table.to_arrow().to_pylist()
     query_vec = rows[0]["vector"]
-    hits = table.search(query_vec).metric("cosine").limit(1).to_list()
+    hits = table.search(query_vec).distance_type("cosine").limit(1).to_list()
     assert hits[0]["id"] == rows[0]["id"]
     assert hits[0]["collection_id"] == "e2e"
 

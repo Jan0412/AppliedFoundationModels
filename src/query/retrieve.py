@@ -79,10 +79,11 @@ class RetrieveSimilar(Runnable):
     @staticmethod
     def _to_retrieved(row: dict) -> RetrievedImage:
         """Build a :class:`RetrievedImage` (image deferred) from a LanceDB row."""
-        # Vectors are stored L2-normalised (see SigLIPModel). LanceDB's
-        # default L2 metric returns the *squared* distance in _distance,
-        # so cosine similarity = 1 - _distance / 2.
-        similarity = 1.0 - float(row["_distance"]) / 2.0
+        # Searched with LanceDB's cosine metric (see ``distance_type`` on the
+        # queries below), so _distance holds the cosine *distance*
+        # (1 - cosine similarity). Convert back to similarity so downstream
+        # steps keep their "higher = closer" contract.
+        similarity = 1.0 - float(row["_distance"])
         cam = row.get("cam2world")
         cam2world = (
             np.asarray(cam, dtype=np.float32).reshape(4, 4)
@@ -115,6 +116,7 @@ class RetrieveSimilar(Runnable):
         if mode == "topk":
             rows = (
                 table.search(state.query_embedding.tolist())
+                .distance_type("cosine")
                 .select(_COLUMNS)
                 .limit(state.top_k_retrieve)
                 .to_list()
@@ -140,12 +142,13 @@ class RetrieveSimilar(Runnable):
         # so the thresholded pool is simply the first `cut.k` rows.
         rows = (
             table.search(state.query_embedding.tolist())
+            .distance_type("cosine")
             .select(_COLUMNS)
             .limit(n_total)
             .to_list()
         )
         sims = np.array(
-            [1.0 - float(r["_distance"]) / 2.0 for r in rows], dtype=np.float32
+            [1.0 - float(r["_distance"]) for r in rows], dtype=np.float32
         )
         cut = dynamic_pool_size(
             sims,
