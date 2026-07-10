@@ -168,6 +168,47 @@ def voxel_downsample(
     return points[idx], (None if colors is None else np.asarray(colors)[idx])
 
 
+def cluster_masks(
+    points: np.ndarray,
+    eps: float = 0.05,
+    min_samples: int = 10,
+    min_size: int = 1,
+) -> list[np.ndarray]:
+    """Boolean masks of all DBSCAN clusters in *points*, largest first.
+
+    DBSCAN groups dense regions and labels sparse points as noise. Objects —
+    consistent across frames — form dense clusters, while per-frame background
+    is scattered and falls to noise. Spatially separated instances of the same
+    category (e.g. several chairs) come back as separate clusters.
+
+    Args:
+        points:      ``(N, 3)`` XYZ.
+        eps:         Neighbourhood radius in metres.
+        min_samples: Core-point neighbour count.
+        min_size:    Drop clusters with fewer points than this.
+
+    Returns:
+        One ``(N,)`` boolean mask per kept cluster, sorted by point count
+        descending (most multi-frame consensus first). Empty list when DBSCAN
+        finds no cluster (every point labelled noise) or *points* is empty.
+    """
+    from sklearn.cluster import DBSCAN
+
+    points = np.asarray(points)
+    if len(points) == 0:
+        return []
+
+    labels = DBSCAN(eps=eps, min_samples=min_samples).fit(points).labels_
+    valid = labels[labels >= 0]
+    if valid.size == 0:
+        return []
+    counts = np.bincount(valid)
+    # Stable sort so equal-size clusters keep ascending-label order (same
+    # tie-break as the old argmax-based largest_cluster).
+    order = np.argsort(-counts, kind="stable")
+    return [labels == int(lab) for lab in order if counts[lab] >= min_size]
+
+
 def largest_cluster(
     points: np.ndarray,
     eps: float = 0.05,
@@ -175,9 +216,7 @@ def largest_cluster(
 ) -> np.ndarray:
     """Boolean mask of the largest DBSCAN cluster in *points*.
 
-    DBSCAN groups dense regions and labels sparse points as noise. The object —
-    consistent across frames — forms the dominant dense cluster, while per-frame
-    background is scattered and falls to noise.
+    Thin wrapper over :func:`cluster_masks` keeping only the dominant cluster.
 
     Args:
         points:      ``(N, 3)`` XYZ.
@@ -189,19 +228,15 @@ def largest_cluster(
         all-True when DBSCAN finds no cluster (every point labelled noise), so
         the caller always gets a usable box.
     """
-    from sklearn.cluster import DBSCAN
-
     points = np.asarray(points)
     n = len(points)
     if n == 0:
         return np.zeros(0, dtype=bool)
 
-    labels = DBSCAN(eps=eps, min_samples=min_samples).fit(points).labels_
-    valid = labels[labels >= 0]
-    if valid.size == 0:
+    masks = cluster_masks(points, eps=eps, min_samples=min_samples)
+    if not masks:
         return np.ones(n, dtype=bool)   # no cluster found — keep everything
-    counts = np.bincount(valid)
-    return labels == int(counts.argmax())
+    return masks[0]
 
 
 def aabb_corners(bbox: np.ndarray) -> np.ndarray:

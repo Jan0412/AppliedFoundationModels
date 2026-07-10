@@ -149,7 +149,7 @@ def test_invoke_dynamic_mode_selects_diverse_subset(
     assert len(diag.selected_ids) == 4
 
 
-def _write_cfg(tmp_path, db_dir, query_section=None):
+def _write_cfg(tmp_path, db_dir, query_section=None, projection_section=None):
     cfg = {
         "models": {
             "siglip": {"model_id": "x", "device": "cpu", "batch_size": 1},
@@ -162,6 +162,8 @@ def _write_cfg(tmp_path, db_dir, query_section=None):
     }
     if query_section is not None:
         cfg["query"] = query_section
+    if projection_section is not None:
+        cfg["projection"] = projection_section
     p = tmp_path / "config.yaml"
     p.write_text(yaml.dump(cfg))
     return p
@@ -206,6 +208,10 @@ def test_from_config_without_query_section_uses_defaults(
     assert pipeline.retrieve.max_k == 400
     assert pipeline.retrieve.strategy == "tail"
     assert pipeline.select.n_diverse == 10
+    # Projection defaults (no projection section present).
+    assert pipeline.project.fuse == "single"
+    assert pipeline.project.max_instances is None
+    assert pipeline.project.min_instance_size == 50
 
 
 def test_from_config_reads_query_section(
@@ -241,6 +247,35 @@ def test_from_config_reads_query_section(
     assert pipeline.retrieve.min_separability == 0.8
     assert pipeline.select.n_diverse == 7
     assert pipeline.select.patch_frac == 0.3
+
+
+def test_from_config_reads_projection_section(
+    tmp_path, mock_siglip_model, mock_sam_model
+):
+    cfg_path = _write_cfg(
+        tmp_path,
+        tmp_path / "db",
+        projection_section={
+            "fuse": "instances",
+            "max_instances": 5,
+            "min_instance_size": 30,
+            "cluster_eps": 0.08,
+        },
+    )
+
+    with patch(
+        "src.query.pipeline.SigLIPModel.from_config",
+        return_value=mock_siglip_model,
+    ), patch(
+        "src.query.pipeline.SAMModel.from_config",
+        return_value=mock_sam_model,
+    ):
+        pipeline = Search2D.from_config(cfg_path)
+
+    assert pipeline.project.fuse == "instances"
+    assert pipeline.project.max_instances == 5
+    assert pipeline.project.min_instance_size == 30
+    assert pipeline.project.cluster_eps == 0.08
 
 
 def test_from_config_rejects_unknown_detector(tmp_path, mock_siglip_model):

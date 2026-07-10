@@ -14,6 +14,7 @@ from src.data_model import ProjectedObject, SearchState
 from src.utils.db import load_collection_meta
 from src.utils.geometry import (
     backproject,
+    cluster_masks,
     largest_cluster,
     robust_bounds,
     voxel_downsample,
@@ -23,25 +24,34 @@ logger = logging.getLogger(__name__)
 
 
 class ProjectTo3D(Runnable):
-    """Back-project the final results and fuse them into one tight 3D object.
+    """Back-project the final results and fuse them into 3D object(s).
 
     Each hit contributes the pixels of its best **mask** (produced by SAM3),
     which are back-projected to world space using the per-row ``cam2world``
     pose and the per-collection intrinsics + ``depth_scale`` (read from the
     LanceDB metadata table written at index time).
 
-    Points from **all** hits are then merged and run through DBSCAN. The object
-    is consistent across frames and forms the dominant dense cluster, while the
-    per-frame background (different from each viewpoint) scatters into noise and
-    is dropped: multi-frame consensus separates object from background. The
-    largest cluster becomes a single fused :class:`ProjectedObject` (cleaned
-    cloud + axis-aligned world box).
+    Points from **all** hits are then merged and run through DBSCAN. Objects
+    are consistent across frames and form dense clusters, while the per-frame
+    background (different from each viewpoint) scatters into noise and is
+    dropped: multi-frame consensus separates object from background.
+
+    Two fuse modes (constructor default, overridable per query via
+    ``state.fuse``):
+
+    - ``"single"`` — the largest cluster becomes one fused
+      :class:`ProjectedObject` (``id="fused"``). The right mode when the query
+      targets one unique object (e.g. the ScanRefer benchmark).
+    - ``"instances"`` — every cluster with at least ``min_instance_size``
+      points becomes its own :class:`ProjectedObject` (``id="obj-{i}"``),
+      sorted by point count descending — the most multi-frame consensus (most
+      probable object) first, so ``projected[0]`` matches single mode.
 
     The collection must have been indexed with depth + poses + calibration.
 
     Pre:  ``state.results`` or ``state.detected`` is set; the collection has a
           ``_collection_meta`` row.
-    Post: ``state.projected`` holds a **single** fused :class:`ProjectedObject`
+    Post: ``state.projected`` holds the fused :class:`ProjectedObject` (s)
           (or is empty when nothing could be back-projected).
     """
 
@@ -52,12 +62,23 @@ class ProjectTo3D(Runnable):
         cluster_eps: float = 0.05,
         cluster_min_samples: int = 10,
         bbox_percentile: Tuple[float, float] = (2.0, 98.0),
+        fuse: str = "single",
+        max_instances: Optional[int] = None,
+        min_instance_size: int = 50,
     ) -> None:
+        if fuse not in ("single", "instances"):
+            raise ValueError(
+                f"ProjectTo3D: unknown fuse mode {fuse!r}. "
+                "Expected 'single' or 'instances'."
+            )
         self.db = db
         self.voxel = voxel
         self.cluster_eps = cluster_eps
         self.cluster_min_samples = cluster_min_samples
         self.bbox_percentile = bbox_percentile
+        self.fuse = fuse
+        self.max_instances = max_instances
+        self.min_instance_size = min_instance_size
         self._meta_cache: dict[str, dict] = {}
 
     def _meta(self, collection_id: str) -> dict:
@@ -144,15 +165,49 @@ class ProjectTo3D(Runnable):
         all_points = np.concatenate(pts_parts)
         all_colors = np.concatenate(col_parts) if (have_colors and col_parts) else None
 
-        # 2. Even out density, then keep the dominant (object) cluster.
+        # 2. Even out density before clustering.
         ds_points, ds_colors = voxel_downsample(all_points, all_colors, self.voxel)
-        mask = largest_cluster(ds_points, self.cluster_eps, self.cluster_min_samples)
-        obj_points = ds_points[mask]
-        obj_colors = ds_colors[mask] if ds_colors is not None else None
 
-        # 3. One fused object: cleaned cloud + tight axis-aligned world box.
-        bbox = robust_bounds(obj_points, *self.bbox_percentile)
-        fused = ProjectedObject(
-            id="fused", path="", points=obj_points, colors=obj_colors, bbox=bbox
+        fuse = state.fuse or self.fuse
+        if fuse == "single":
+            # 3a. One fused object: dominant cluster + tight world box.
+            mask = largest_cluster(
+                ds_points, self.cluster_eps, self.cluster_min_samples
+            )
+            obj_points = ds_points[mask]
+            obj_colors = ds_colors[mask] if ds_colors is not None else None
+            fused = ProjectedObject(
+                id="fused",
+                path="",
+                points=obj_points,
+                colors=obj_colors,
+                bbox=robust_bounds(obj_points, *self.bbox_percentile),
+            )
+            return state.model_copy(update={"projected": [fused]})
+
+        # 3b. One object per cluster, most multi-frame consensus first.
+        masks = cluster_masks(
+            ds_points,
+            eps=self.cluster_eps,
+            min_samples=self.cluster_min_samples,
+            min_size=self.min_instance_size,
         )
-        return state.model_copy(update={"projected": [fused]})
+        if not masks:
+            # All points labelled noise (or every cluster below the size
+            # floor) — keep everything as one object so the caller still
+            # gets a usable box, mirroring largest_cluster's fallback.
+            masks = [np.ones(len(ds_points), dtype=bool)]
+        if self.max_instances is not None:
+            masks = masks[: self.max_instances]
+
+        projected = [
+            ProjectedObject(
+                id=f"obj-{i}",
+                path="",
+                points=ds_points[m],
+                colors=ds_colors[m] if ds_colors is not None else None,
+                bbox=robust_bounds(ds_points[m], *self.bbox_percentile),
+            )
+            for i, m in enumerate(masks)
+        ]
+        return state.model_copy(update={"projected": projected})

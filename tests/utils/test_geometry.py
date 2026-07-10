@@ -10,6 +10,7 @@ from src.utils.geometry import (
     backproject,
     build_scene_cloud,
     central_depth,
+    cluster_masks,
     farthest_point_sampling,
     largest_cluster,
     lookat_point,
@@ -425,3 +426,58 @@ def test_fps_never_repeats_an_index():
 
 def test_fps_empty_input_returns_empty():
     assert farthest_point_sampling(np.empty((0, 3), dtype=np.float32), 0, 4) == []
+
+
+# ---------------------------------------------------------------------------
+# cluster_masks
+# ---------------------------------------------------------------------------
+
+
+def _two_blobs(n_big: int = 30, n_small: int = 10) -> np.ndarray:
+    """Two tight point blobs 10 m apart (eps=1.0 separates them cleanly)."""
+    rng = np.random.default_rng(0)
+    big = rng.normal(0.0, 0.05, (n_big, 3))
+    small = rng.normal(10.0, 0.05, (n_small, 3))
+    return np.vstack([big, small]).astype(np.float32)
+
+
+def test_cluster_masks_separates_blobs_largest_first():
+    pts = _two_blobs(30, 10)
+    masks = cluster_masks(pts, eps=1.0, min_samples=3)
+
+    assert len(masks) == 2
+    assert masks[0].sum() == 30 and masks[1].sum() == 10   # largest first
+    # Masks are disjoint and each covers exactly one blob.
+    assert not np.any(masks[0] & masks[1])
+    assert masks[0][:30].all() and masks[1][30:].all()
+
+
+def test_cluster_masks_min_size_drops_small_cluster():
+    pts = _two_blobs(30, 10)
+    masks = cluster_masks(pts, eps=1.0, min_samples=3, min_size=20)
+
+    assert len(masks) == 1
+    assert masks[0].sum() == 30
+
+
+def test_cluster_masks_all_noise_returns_empty():
+    # Points too far apart for eps and min_samples → everything is noise.
+    pts = np.array([[0, 0, 0], [10, 0, 0], [0, 10, 0]], dtype=np.float32)
+    assert cluster_masks(pts, eps=0.1, min_samples=2) == []
+
+
+def test_cluster_masks_empty_input():
+    assert cluster_masks(np.empty((0, 3), dtype=np.float32)) == []
+
+
+def test_largest_cluster_matches_first_cluster_mask():
+    pts = _two_blobs(30, 10)
+    mask = largest_cluster(pts, eps=1.0, min_samples=3)
+    masks = cluster_masks(pts, eps=1.0, min_samples=3)
+    assert np.array_equal(mask, masks[0])
+
+
+def test_largest_cluster_keeps_all_noise_fallback():
+    pts = np.array([[0, 0, 0], [10, 0, 0], [0, 10, 0]], dtype=np.float32)
+    mask = largest_cluster(pts, eps=0.1, min_samples=2)
+    assert mask.all()   # no cluster found — keep everything

@@ -46,7 +46,10 @@ class Search2D:
 
     The final :attr:`project` step back-projects each result's SAM mask into
     the 3D world point cloud (``state.projected``); it requires the SAM
-    detector and a collection indexed with depth + poses + calibration.
+    detector and a collection indexed with depth + poses + calibration. Its
+    ``fuse`` mode (``"single"`` one fused object — default — or
+    ``"instances"`` one object per spatial cluster, most consensus first) is
+    likewise overridable per query via ``invoke(fuse=...)``.
 
     The detector is :class:`SAMModel` (SAM3), exposing the
     ``invoke({"image": pil, "text": str}) -> dict`` contract. Internally
@@ -77,6 +80,10 @@ class Search2D:
         strategy: str = "tail",
         n_diverse: int = 10,
         patch_frac: float = 0.2,
+        fuse: str = "single",
+        max_instances: Optional[int] = None,
+        min_instance_size: int = 50,
+        cluster_eps: float = 0.05,
     ) -> None:
         self.embed = EmbedQuery(siglip)
         self.retrieve = RetrieveSimilar(
@@ -90,7 +97,13 @@ class Search2D:
         self.select = SelectDiverse(db, n_diverse=n_diverse, patch_frac=patch_frac)
         self.detect = Detect(detector)
         self.rerank = RerankByDetection()
-        self.project = ProjectTo3D(db)
+        self.project = ProjectTo3D(
+            db,
+            cluster_eps=cluster_eps,
+            fuse=fuse,
+            max_instances=max_instances,
+            min_instance_size=min_instance_size,
+        )
         self.chain = (
             self.embed | self.retrieve | self.select
             | self.detect | self.rerank | self.project
@@ -110,10 +123,11 @@ class Search2D:
             detector: Which detector to wire — only ``"sam"`` (SAM3) is
                       supported; any other value raises ``ValueError``.
 
-        Reads ``indexing.db_path`` for the LanceDB store and the optional
-        ``query`` section for retrieval/selection parameters (defaults apply
-        when the section is absent); SAM and SigLIP load their own sections
-        via their respective ``from_config`` classmethods.
+        Reads ``indexing.db_path`` for the LanceDB store, the optional
+        ``query`` section for retrieval/selection parameters, and the optional
+        ``projection`` section for 3D fuse parameters (defaults apply when a
+        section is absent); SAM and SigLIP load their own sections via their
+        respective ``from_config`` classmethods.
         """
         cfg = yaml.safe_load(Path(path).read_text())
         siglip = SigLIPModel.from_config(path)
@@ -125,6 +139,7 @@ class Search2D:
         det = SAMModel.from_config(path)
         db = _db_connect(cfg["indexing"]["db_path"])
         qcfg = cfg.get("query") or {}
+        pcfg = cfg.get("projection") or {}
         return cls(
             siglip=siglip,
             detector=det,
@@ -136,6 +151,10 @@ class Search2D:
             strategy=qcfg.get("strategy", "tail"),
             n_diverse=qcfg.get("n_diverse", 10),
             patch_frac=qcfg.get("patch_frac", 0.2),
+            fuse=pcfg.get("fuse", "single"),
+            max_instances=pcfg.get("max_instances"),
+            min_instance_size=pcfg.get("min_instance_size", 50),
+            cluster_eps=pcfg.get("cluster_eps", 0.05),
         )
 
     def invoke(
@@ -148,13 +167,15 @@ class Search2D:
         top_k_final: int = 5,
         retrieval_mode: Optional[str] = None,
         n_diverse: Optional[int] = None,
+        fuse: Optional[str] = None,
     ) -> SearchState:
         """Run the full chain.
 
         Accepts either a pre-built :class:`SearchState` or the constructor
-        kwargs. ``retrieval_mode`` / ``n_diverse`` override the configured
-        step defaults for this query only (``top_k_retrieve`` applies in
-        ``"topk"`` mode only). Returns the final state with ``results`` set.
+        kwargs. ``retrieval_mode`` / ``n_diverse`` / ``fuse`` override the
+        configured step defaults for this query only (``top_k_retrieve``
+        applies in ``"topk"`` mode only). Returns the final state with
+        ``results`` set.
         """
         if state is None:
             if query is None or collection_id is None:
@@ -169,5 +190,6 @@ class Search2D:
                 top_k_final=top_k_final,
                 retrieval_mode=retrieval_mode,
                 n_diverse=n_diverse,
+                fuse=fuse,
             )
         return self.chain.invoke(state)

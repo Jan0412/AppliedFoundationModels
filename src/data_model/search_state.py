@@ -194,6 +194,11 @@ class SearchState(BaseModel):
         n_diverse:       Per-query override of how many viewpoint-diverse
                          frames :class:`SelectDiverse` keeps; ``None`` uses
                          the step default.
+        fuse:            Per-query override of the 3D fuse mode
+                         (``"single"`` one fused object | ``"instances"``
+                         one object per DBSCAN cluster, most consensus
+                         first); ``None`` uses the :class:`ProjectTo3D`
+                         default.
 
         query_embedding: Set by :class:`EmbedQuery`. 1-D, L2-normalised.
         retrieved:       Set by :class:`RetrieveSimilar` (images unloaded);
@@ -204,9 +209,11 @@ class SearchState(BaseModel):
         detected:        Set by :class:`Detect` (full, unsorted).
         results:         Set by :class:`RerankByDetection`
                          (sorted desc by ``detection_score``, trimmed).
-        projected:       Set by :class:`ProjectTo3D` — a **single** fused
-                         :class:`ProjectedObject` (all frames' points merged,
-                         clustered, and reduced to one tight 3D box), or empty.
+        projected:       Set by :class:`ProjectTo3D` — the fused
+                         :class:`ProjectedObject` (s): one in ``"single"``
+                         fuse mode, one per cluster (largest first) in
+                         ``"instances"`` mode, or empty when nothing could
+                         be back-projected.
     """
 
     query: str
@@ -215,6 +222,7 @@ class SearchState(BaseModel):
     top_k_final: int = 5
     retrieval_mode: Optional[Literal["topk", "dynamic"]] = None
     n_diverse: Optional[int] = None
+    fuse: Optional[Literal["single", "instances"]] = None
 
     query_embedding: Optional[np.ndarray] = None
     retrieved: Optional[list[RetrievedImage]] = None
