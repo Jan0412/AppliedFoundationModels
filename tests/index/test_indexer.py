@@ -395,6 +395,66 @@ def test_insert_uses_supplied_job_id(indexer, make_image_files):
     assert get_status("my-job-77") is not None
 
 
+# ---------------------------------------------------------------------------
+# insert/update — caller-owned job (multi-stage callers, e.g. video ingestion)
+# ---------------------------------------------------------------------------
+
+
+def test_insert_with_external_job_advances_it_without_closing_it(indexer, make_image_files):
+    """The caller owns the lifecycle: the indexer advances but never finishes."""
+    paths = make_image_files(4)
+    job = JobRegistry.start(collection_id="ext1", total=0, stages=("index",))
+    job.set_stage("index", total=4)
+
+    returned = indexer.insert(paths, collection_id="ext1", job=job, **_calib(4))
+
+    assert returned is job
+    assert job.processed == 4
+    assert job.state == "running"      # still the caller's to finish
+    assert job.finished_at is None
+
+
+def test_insert_with_external_job_registers_no_second_job(indexer, make_image_files):
+    JobRegistry._jobs.clear()
+    paths = make_image_files(2)
+    job = JobRegistry.start(collection_id="ext2", total=2)
+    indexer.insert(paths, collection_id="ext2", job=job, **_calib(2))
+    assert [j.job_id for j in JobRegistry.list_all()] == [job.job_id]
+
+
+def test_insert_with_external_job_reraises_without_failing_the_job(
+    indexer, mock_siglip_model, make_image_files
+):
+    """On error the caller — not the indexer — decides the job is failed."""
+    paths = make_image_files(2)
+    job = JobRegistry.start(collection_id="ext3", total=2)
+    mock_siglip_model.embed_images.side_effect = RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        indexer.insert(paths, collection_id="ext3", job=job, **_calib(2))
+
+    assert job.state == "running"
+    assert job.error is None
+
+
+def test_update_with_external_job_advances_it_without_closing_it(indexer, make_image_files):
+    paths = make_image_files(3)
+    job = JobRegistry.start(collection_id="ext4", total=3)
+    indexer.update(paths, collection_id="ext4", job=job, **_calib(3))
+    assert job.processed == 3
+    assert job.state == "running"
+
+
+@pytest.mark.parametrize("method", ["insert", "update"])
+def test_job_and_job_id_together_raise(indexer, make_image_files, method):
+    paths = make_image_files(1)
+    job = JobRegistry.start(collection_id="ext5", total=1)
+    with pytest.raises(ValueError, match="not both"):
+        getattr(indexer, method)(
+            paths, collection_id="ext5", job=job, job_id="also-this", **_calib(1)
+        )
+
+
 def test_insert_invokes_model_embed_images(indexer, mock_siglip_model, make_image_files):
     paths = make_image_files(3)
     indexer.insert(paths, collection_id="c4", **_calib(3))

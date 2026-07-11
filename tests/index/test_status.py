@@ -57,12 +57,12 @@ def test_jobstatus_fail_sets_state_failed_with_error():
 
 
 def test_jobstatus_as_dict_returns_all_public_fields():
-    """as_dict returns exactly the eight documented keys and no private ones."""
+    """as_dict returns exactly the ten documented keys and no private ones."""
     s = JobStatus(job_id="abc", collection_id="cid", total=4)
     s.advance(2)
     d = s.as_dict()
     expected_keys = {
-        "job_id", "collection_id", "state", "total",
+        "job_id", "collection_id", "state", "stage", "stages", "total",
         "processed", "started_at", "finished_at", "error",
     }
     assert set(d.keys()) == expected_keys
@@ -71,6 +71,47 @@ def test_jobstatus_as_dict_returns_all_public_fields():
     assert d["state"] == "running"
     # No private keys leak
     assert not any(k.startswith("_") for k in d)
+
+
+def test_jobstatus_without_stages_has_no_stage():
+    """A plain single-stage job keeps stage/stages None (legacy behaviour)."""
+    s = JobStatus(job_id="j", collection_id="c", total=3)
+    assert s.stage is None
+    assert s.stages is None
+    d = s.as_dict()
+    assert d["stage"] is None
+    assert d["stages"] is None
+
+
+def test_set_stage_names_the_stage_and_resets_progress():
+    s = JobStatus(job_id="j", collection_id="c", total=0, stages=("extract", "index"))
+    s.set_stage("extract", total=4)
+    s.advance(3)
+    assert (s.stage, s.total, s.processed) == ("extract", 4, 3)
+
+    # Entering the next stage restarts the counter against a new total.
+    s.set_stage("index", total=10)
+    assert (s.stage, s.total, s.processed) == ("index", 10, 0)
+    s.advance(2)
+    assert s.processed == 2
+
+
+def test_stages_are_exposed_for_step_display():
+    """as_dict carries the declared stage plan so a UI can render 'step 2/3'."""
+    s = JobStatus(job_id="j", collection_id="c", total=0,
+                  stages=("extract", "reconstruct", "index"))
+    s.set_stage("reconstruct", total=50)
+    s.advance(14)
+    d = s.as_dict()
+    assert d["stages"] == ["extract", "reconstruct", "index"]
+    assert d["stage"] == "reconstruct"
+    assert (d["processed"], d["total"]) == (14, 50)
+
+
+def test_registry_start_forwards_stages():
+    job = JobRegistry.start(collection_id="c", total=0, stages=("a", "b"))
+    assert job.stages == ("a", "b")
+    assert get_status(job.job_id)["stages"] == ["a", "b"]
 
 
 def test_jobstatus_as_dict_after_finish():

@@ -354,6 +354,45 @@ class Indexer:
                 job.advance(len(batch))
                 pbar.update(len(batch))
 
+    @staticmethod
+    def _validate_job_args(job: JobStatus | None, job_id: str | None) -> None:
+        if job is not None and job_id is not None:
+            raise ValueError(
+                "pass either job= (caller-owned lifecycle) or job_id= "
+                "(indexer-owned), not both."
+            )
+
+    def _run_job(
+        self,
+        records: list[dict],
+        table,
+        write_fn: Callable,
+        desc: str,
+        collection_id: str,
+        job_id: str | None,
+        job: JobStatus | None,
+    ) -> JobStatus:
+        """Run :meth:`_embed_loop` under a job and return it.
+
+        When *job* is supplied the caller owns its lifecycle — it has already
+        set the stage and total, and it (not the indexer) calls ``finish`` /
+        ``fail``. Exceptions always propagate either way.
+        """
+        external = job is not None
+        if job is None:
+            job = JobRegistry.start(
+                collection_id=collection_id, total=len(records), job_id=job_id
+            )
+        try:
+            self._embed_loop(records, table, write_fn=write_fn, desc=desc, job=job)
+            if not external:
+                job.finish()
+        except Exception as exc:
+            if not external:
+                job.fail(str(exc))
+            raise
+        return job
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -369,6 +408,7 @@ class Indexer:
         depth_scale: float,
         ids: list[str] | None = None,
         job_id: str | None = None,
+        job: JobStatus | None = None,
     ) -> JobStatus:
         """Embed *images* and insert them as new rows into *collection_id*.
 
@@ -391,10 +431,19 @@ class Indexer:
             ids:           Optional explicit ids, one per image.  Auto-derived
                            from the path or image content when ``None``.
             job_id:        Optional caller-supplied job id (e.g. request UUID).
+            job:           Optional caller-owned :class:`JobStatus` — for
+                           multi-stage callers (e.g. video ingestion) that
+                           track indexing as one stage of a larger job. The
+                           indexer only advances it; the caller sets the stage
+                           and calls ``finish``/``fail``. Mutually exclusive
+                           with ``job_id``.
 
         Returns:
-            A :class:`~src.index.status.JobStatus` with ``state="done"``.
+            A :class:`~src.index.status.JobStatus` — ``state="done"`` unless a
+            caller-owned *job* was passed, whose lifecycle the caller closes.
         """
+        self._validate_job_args(job, job_id)
+
         records = self._normalize(images, collection_id, ids, depth_paths, poses)
         table   = self._open_or_create_table(collection_id)
         self._write_meta(collection_id, intrinsics, depth_scale)
@@ -413,20 +462,14 @@ class Indexer:
                     "Call update() to upsert existing rows."
                 )
 
-        job = JobRegistry.start(collection_id=collection_id, total=len(records), job_id=job_id)
-        try:
-            self._embed_loop(
-                records, table,
-                write_fn=lambda t, rows: t.add(rows),
-                desc=f"Indexing '{collection_id}'",
-                job=job,
-            )
-            job.finish()
-        except Exception as exc:
-            job.fail(str(exc))
-            raise
-
-        return job
+        return self._run_job(
+            records, table,
+            write_fn=lambda t, rows: t.add(rows),
+            desc=f"Indexing '{collection_id}'",
+            collection_id=collection_id,
+            job_id=job_id,
+            job=job,
+        )
 
     def update(
         self,
@@ -439,6 +482,7 @@ class Indexer:
         depth_scale: float,
         ids: list[str] | None = None,
         job_id: str | None = None,
+        job: JobStatus | None = None,
     ) -> JobStatus:
         """Embed *images* and upsert them into *collection_id*.
 
@@ -454,10 +498,15 @@ class Indexer:
             depth_scale:   Per-collection depth divisor (raw units → metres).
             ids:           Optional explicit ids.
             job_id:        Optional caller-supplied job id.
+            job:           Optional caller-owned :class:`JobStatus` (see
+                           :meth:`insert`). Mutually exclusive with ``job_id``.
 
         Returns:
-            A :class:`~src.index.status.JobStatus` with ``state="done"``.
+            A :class:`~src.index.status.JobStatus` — ``state="done"`` unless a
+            caller-owned *job* was passed, whose lifecycle the caller closes.
         """
+        self._validate_job_args(job, job_id)
+
         records = self._normalize(images, collection_id, ids, depth_paths, poses)
         table   = self._open_or_create_table(collection_id)
         self._write_meta(collection_id, intrinsics, depth_scale)
@@ -470,17 +519,11 @@ class Indexer:
                  .execute(rows)
             )
 
-        job = JobRegistry.start(collection_id=collection_id, total=len(records), job_id=job_id)
-        try:
-            self._embed_loop(
-                records, table,
-                write_fn=_upsert,
-                desc=f"Updating '{collection_id}'",
-                job=job,
-            )
-            job.finish()
-        except Exception as exc:
-            job.fail(str(exc))
-            raise
-
-        return job
+        return self._run_job(
+            records, table,
+            write_fn=_upsert,
+            desc=f"Updating '{collection_id}'",
+            collection_id=collection_id,
+            job_id=job_id,
+            job=job,
+        )

@@ -20,19 +20,30 @@ import uuid
 
 
 class JobStatus:
-    """Mutable, thread-safe status record for a single indexing job."""
+    """Mutable, thread-safe status record for a single indexing job.
+
+    A job may optionally declare *stages* (e.g. video ingestion runs
+    ``("extract", "reconstruct", "index")``). ``total`` and ``processed`` are
+    then per-stage counters, reset by :meth:`set_stage`; readers combine
+    ``stage`` with ``stages`` to render "step 2/3 — reconstruct, 14/50". Jobs
+    without stages keep ``stage=None`` and count over the whole job, exactly as
+    before.
+    """
 
     def __init__(
         self,
         job_id: str,
         collection_id: str,
         total: int,
+        stages: tuple[str, ...] | None = None,
     ) -> None:
         self.job_id = job_id
         self.collection_id = collection_id
         self.total = total
         self.processed: int = 0
         self.state: str = "running"       # "running" | "done" | "failed"
+        self.stages: tuple[str, ...] | None = tuple(stages) if stages else None
+        self.stage: str | None = None
         self.started_at: float = time.time()
         self.finished_at: float | None = None
         self.error: str | None = None
@@ -46,6 +57,16 @@ class JobStatus:
         """Increment the processed-frame counter by *n*."""
         with self._lock:
             self.processed += n
+
+    def set_stage(self, stage: str, total: int) -> None:
+        """Enter *stage*: name it, set its item count, and reset progress.
+
+        Subsequent :meth:`advance` calls count within this stage only.
+        """
+        with self._lock:
+            self.stage = stage
+            self.total = int(total)
+            self.processed = 0
 
     def finish(self) -> None:
         """Mark the job as successfully completed."""
@@ -71,6 +92,8 @@ class JobStatus:
                 "job_id": self.job_id,
                 "collection_id": self.collection_id,
                 "state": self.state,
+                "stage": self.stage,
+                "stages": list(self.stages) if self.stages else None,
                 "total": self.total,
                 "processed": self.processed,
                 "started_at": self.started_at,
@@ -100,6 +123,7 @@ class JobRegistry:
         collection_id: str,
         total: int,
         job_id: str | None = None,
+        stages: tuple[str, ...] | None = None,
     ) -> JobStatus:
         """Create a new :class:`JobStatus`, register it, and return it.
 
@@ -108,9 +132,13 @@ class JobRegistry:
             total:         Total number of images in this job.
             job_id:        Optional caller-supplied id (e.g. a request UUID).
                            If omitted, a random hex id is generated.
+            stages:        Optional stage names for a multi-stage job; the
+                           caller then drives them with :meth:`JobStatus.set_stage`.
         """
         job_id = job_id or uuid.uuid4().hex
-        job = JobStatus(job_id=job_id, collection_id=collection_id, total=total)
+        job = JobStatus(
+            job_id=job_id, collection_id=collection_id, total=total, stages=stages
+        )
         with cls._lock:
             cls._jobs[job_id] = job
         return job
