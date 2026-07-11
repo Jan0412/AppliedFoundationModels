@@ -9,15 +9,22 @@ layout a benchmark uses) lives here, so swapping datasets is one call::
     idx.insert(fs.paths, COLLECTION, ids=...,
                depth_paths=fs.depth_paths, poses=fs.poses,
                intrinsics=fs.intrinsics, depth_scale=fs.depth_scale)
+
+:func:`load_collection` closes the loop: it rebuilds the same bundle back out
+of an *indexed* collection, so consumers that need every frame of a scene (the
+UI's scene point cloud) work off the DB alone — no dataset dir, no knowledge of
+which benchmark the collection came from.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
+from .db import load_collection_meta
 from .geometry import quat_to_cam2world
 
 
@@ -104,6 +111,85 @@ def load_tum(
         poses=poses,
         intrinsics=dict(intrinsics),
         depth_scale=depth_scale,
+    )
+
+
+def _natural_key(path: str) -> tuple:
+    """Sort key ordering ``frame2`` before ``frame10`` (digit runs compare numerically)."""
+    return tuple(
+        int(tok) if tok.isdigit() else tok for tok in re.split(r"(\d+)", path)
+    )
+
+
+def load_collection(db, collection_id: str) -> FrameSet:
+    """Rebuild a :class:`FrameSet` from an *indexed* collection in LanceDB.
+
+    The rows written by :class:`~src.index.Indexer` already carry everything a
+    :class:`FrameSet` needs — ``path``, ``depth_path`` and the flattened
+    ``cam2world`` per frame — plus the collection's calibration row. Reading
+    them back gives whole-scene access (e.g. for
+    :func:`~src.utils.geometry.build_scene_cloud`) without knowing which
+    dataset the collection came from, or where that dataset lives on disk.
+
+    Frames are ordered naturally by RGB path, so the result is stable across
+    calls (and temporal for datasets naming frames by index or timestamp).
+    Rows without a path/depth path, or with a non-finite pose, are skipped —
+    mirroring :func:`load_scannet`'s handling of lost-tracking frames.
+
+    Args:
+        db:            An open :class:`lancedb.DBConnection`.
+        collection_id: Name of the collection (= LanceDB table).
+
+    Returns:
+        A :class:`FrameSet` covering every usable frame in the collection.
+
+    Raises:
+        ValueError: If the table or its calibration row is missing — without
+            intrinsics the collection cannot be back-projected.
+    """
+    if collection_id not in db.list_tables().tables:
+        raise ValueError(f"collection '{collection_id}' is not in this store.")
+
+    meta = load_collection_meta(db, collection_id)
+    if meta is None:
+        raise ValueError(
+            f"collection '{collection_id}' has no calibration row "
+            f"(intrinsics + depth_scale); it cannot be back-projected."
+        )
+
+    table = db.open_table(collection_id)
+    n_rows = table.count_rows()
+    rows = (
+        table.search()
+             .select(["path", "depth_path", "cam2world"])
+             .limit(n_rows)
+             .to_list()
+        if n_rows else []
+    )
+    rows.sort(key=lambda r: _natural_key(r.get("path") or ""))
+
+    paths: list[str] = []
+    depth_paths: list[str] = []
+    poses: list[np.ndarray] = []
+    for r in rows:
+        path       = r.get("path") or ""
+        depth_path = r.get("depth_path") or ""
+        cam        = r.get("cam2world")
+        if not path or not depth_path or cam is None or len(cam) != 16:
+            continue
+        pose = np.asarray(cam, dtype=np.float32).reshape(4, 4)
+        if not np.isfinite(pose).all():
+            continue
+        paths.append(path)
+        depth_paths.append(depth_path)
+        poses.append(pose)
+
+    return FrameSet(
+        paths=paths,
+        depth_paths=depth_paths,
+        poses=poses,
+        intrinsics={k: meta[k] for k in ("fx", "fy", "cx", "cy")},
+        depth_scale=meta["depth_scale"],
     )
 
 
