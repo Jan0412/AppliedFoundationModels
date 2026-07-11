@@ -29,10 +29,13 @@ _MODES = ("simple", "cluster_single", "cluster_instances")
 class ProjectTo3D(Runnable):
     """Back-project the final results and fuse them into 3D object(s).
 
-    Each hit contributes the pixels of its best **mask** (produced by SAM3),
-    which are back-projected to world space using the per-row ``cam2world``
-    pose and the per-collection intrinsics + ``depth_scale`` (read from the
-    LanceDB metadata table written at index time).
+    Each hit contributes **mask** pixels (produced by SAM3): the single
+    highest-scoring mask for ``simple``/``cluster_single``, or the union of
+    **all** the frame's masks for ``cluster_instances`` (so every detected
+    segment is back-projected, not just the top one). Those pixels are
+    back-projected to world space using the per-row ``cam2world`` pose and the
+    per-collection intrinsics + ``depth_scale`` (read from the LanceDB metadata
+    table written at index time).
 
     Points from **all** hits are merged, then handled per ``mode`` (constructor
     default, overridable per query via ``state.mode``):
@@ -45,11 +48,14 @@ class ProjectTo3D(Runnable):
       consistent across frames) and drops the per-frame background (scattered
       into noise): multi-frame consensus separates object from background. The
       right mode when the query targets one unique object (e.g. ScanRefer).
-    - ``"cluster_instances"`` — DBSCAN, then every cluster with at least
+    - ``"cluster_instances"`` — back-projects **every** SAM mask per frame
+      (not just the best one), then DBSCAN, then every cluster with at least
       ``min_instance_size`` points becomes its own :class:`ProjectedObject`
       (``id="obj-{i}"``), sorted by point count descending — the most
       multi-frame consensus (most probable object) first, so ``projected[0]``
-      matches ``cluster_single``.
+      matches ``cluster_single``. Use this when several distinct objects
+      (e.g. multiple chairs/books) should each be recovered: SAM's per-frame
+      segments feed the cloud and 3D clustering splits them into instances.
 
     The collection must have been indexed with depth + poses + calibration.
 
@@ -98,16 +104,29 @@ class ProjectTo3D(Runnable):
         return self._meta_cache[collection_id]
 
     @staticmethod
-    def _select_mask(hit) -> Optional[np.ndarray]:
+    def _to_np(mask) -> np.ndarray:
+        return mask.cpu().numpy() if hasattr(mask, "cpu") else np.asarray(mask)
+
+    @classmethod
+    def _select_mask(cls, hit, all_masks: bool = False) -> Optional[np.ndarray]:
         """Return the boolean source mask for *hit*, or ``None`` if it has none.
 
-        Uses the highest-scoring segmentation mask (SAM3 always produces masks).
+        With ``all_masks`` False (default) uses the single highest-scoring
+        segmentation mask — the right choice when the query targets one object
+        (``simple``/``cluster_single``). With ``all_masks`` True the union of
+        **every** SAM mask for the frame is returned, so all detected segments
+        contribute pixels and instance splitting is left to 3D clustering
+        (``cluster_instances``). SAM3 always produces masks.
         """
         if not hit.masks:
             return None
+        if all_masks:
+            union = cls._to_np(hit.masks[0]).astype(bool)
+            for m in hit.masks[1:]:
+                union |= cls._to_np(m).astype(bool)
+            return union
         best = int(torch.as_tensor(hit.scores).argmax()) if len(hit.masks) > 1 else 0
-        mask = hit.masks[best]
-        return mask.cpu().numpy() if hasattr(mask, "cpu") else np.asarray(mask)
+        return cls._to_np(hit.masks[best])
 
     def invoke(
         self,
@@ -126,6 +145,11 @@ class ProjectTo3D(Runnable):
         intr = (meta["fx"], meta["fy"], meta["cx"], meta["cy"])
         depth_scale = meta["depth_scale"]
 
+        # cluster_instances back-projects every SAM segment per frame (3D
+        # clustering splits them); the single-object modes use the best mask.
+        mode = state.mode or self.mode
+        all_masks = mode == "cluster_instances"
+
         # 1. Back-project every hit and accumulate one big point cloud.
         pts_parts: list[np.ndarray] = []
         col_parts: list[np.ndarray] = []
@@ -138,7 +162,7 @@ class ProjectTo3D(Runnable):
                     stacklevel=2,
                 )
                 continue
-            mask_np = self._select_mask(hit)
+            mask_np = self._select_mask(hit, all_masks=all_masks)
             if mask_np is None:
                 warnings.warn(
                     f"ProjectTo3D: skipping '{hit.id}' — no mask to "
@@ -172,7 +196,6 @@ class ProjectTo3D(Runnable):
         # 2. Even out density before clustering.
         ds_points, ds_colors = voxel_downsample(all_points, all_colors, self.voxel)
 
-        mode = state.mode or self.mode
         if mode == "simple":
             # 3a. No clustering — keep every back-projected point as one
             # object, no noise rejection or instance splitting.

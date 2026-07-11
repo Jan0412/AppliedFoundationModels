@@ -181,6 +181,49 @@ def test_instances_min_size_drops_small_cluster(populated_db):
     assert out.projected[0].points.shape[0] == 64
 
 
+def _two_mask_detected(populated_db, *, frame=0, cam2world=None):
+    """One frame with two disjoint SAM segments (top/bottom halves, 32 px each).
+
+    The top half scores higher, so single-object modes keep only it.
+    """
+    top = torch.zeros(8, 8, dtype=torch.bool)
+    top[0:4, :] = True
+    bot = torch.zeros(8, 8, dtype=torch.bool)
+    bot[4:8, :] = True
+    if cam2world is None:
+        cam2world = np.eye(4, dtype=np.float32)
+    return DetectedImage(
+        id=populated_db["ids"][frame],
+        path=populated_db["paths"][frame],
+        similarity_score=1.0,
+        detection_score=0.9,
+        boxes=torch.tensor([[0.0, 0.0, 8.0, 4.0], [0.0, 4.0, 8.0, 8.0]]),
+        scores=torch.tensor([0.9, 0.5]),   # top half is the best mask
+        masks=[top, bot],
+        depth_path=populated_db["depth_paths"][frame],
+        cam2world=cam2world,
+    )
+
+
+def test_instances_mode_backprojects_all_masks_per_frame(populated_db):
+    # cluster_instances must back-project BOTH segments, not just the top one.
+    di = _two_mask_detected(populated_db)
+    out = _projector(
+        populated_db, mode="cluster_instances", min_instance_size=1
+    ).invoke(_state(populated_db, [di]))
+
+    total = sum(o.points.shape[0] for o in out.projected)
+    assert total == 64   # all 64 px from both masks (32 + 32)
+
+
+def test_single_object_modes_use_only_best_mask(populated_db):
+    # simple / cluster_single keep only the top-scoring mask (32 px), unchanged.
+    di = _two_mask_detected(populated_db)
+    for mode in ("simple", "cluster_single"):
+        out = _projector(populated_db, mode=mode).invoke(_state(populated_db, [di]))
+        assert out.projected[0].points.shape[0] == 32, mode
+
+
 def test_state_mode_overrides_constructor(populated_db):
     hits = [
         _detected(populated_db, frame=0),
