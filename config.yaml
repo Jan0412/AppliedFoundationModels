@@ -35,3 +35,12 @@ projection:
   cluster_eps: 0.05           # DBSCAN radius (m); larger merges nearby instances (cluster_* modes)
   cluster_min_samples: 10     # DBSCAN core-point neighbour count; larger = stricter (cluster_* modes)
   bbox_percentile: [2.0, 98.0] # [low, high] percentile clamp for robust bounding box
+
+ui:
+  port: 8080
+  cache_dir: "data/scene_cache"   # npz cache of built scene point clouds
+  ingest_dir: "data/scenes"       # uploaded videos + their extracted frames
+  scene_n_frames: 250             # frames back-projected into the background cloud
+  voxel: 0.02                     # cloud downsample edge (m); also the render point size
+  extract_fps: 2.0                # frames sampled per second of uploaded video
+  extract_max_frames: 300         # hard cap on frames taken from one video

@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "accelerate>=1.0.0",
+    "av>=14.0",
     "dbscan>=0.0.12",
     "huggingface-hub>=1.16.1",
     "jupyterlab>=4.5.7",
@@ -22,6 +23,7 @@ dependencies = [
     "tqdm>=4.66",
     "transformers>=5.9.0",
     "vggt",
+    "viser>=1.0.30",
 ]
 
 [dependency-groups]
