@@ -4,7 +4,6 @@ Provides:
 - ``embed_dim``           — small embedding width used everywhere here.
 - ``mock_siglip_model``   — SigLIPModel-shaped mock; only ``embed_text`` is wired.
 - ``mock_sam_model``      — SAMModel-shaped mock returning masks + boxes + scores.
-- ``mock_dino_model``     — GroundingDINOModel-shaped mock returning labels + boxes + scores.
 - ``tiny_image_files``    — factory that writes N tiny PNGs to disk.
 - ``populated_db``        — real LanceDB store containing a 1-table collection
                             with known vectors + image paths, plus the connection.
@@ -58,7 +57,7 @@ def mock_siglip_model() -> MagicMock:
 
 @pytest.fixture
 def mock_sam_model() -> MagicMock:
-    """SAMModel-shaped mock. Returns ``{masks, boxes, scores}`` (no labels).
+    """SAMModel-shaped mock. Returns ``{masks, boxes, scores}``.
 
     Tests can override ``model.invoke.side_effect`` to return per-call data.
     """
@@ -67,22 +66,6 @@ def mock_sam_model() -> MagicMock:
     def _default_invoke(inp):  # noqa: ARG001
         return {
             "masks": [torch.zeros(8, 8, dtype=torch.bool)],
-            "boxes": torch.tensor([[0.0, 0.0, 1.0, 1.0]]),
-            "scores": torch.tensor([0.5]),
-        }
-
-    model.invoke = MagicMock(side_effect=_default_invoke)
-    return model
-
-
-@pytest.fixture
-def mock_dino_model() -> MagicMock:
-    """GroundingDINOModel-shaped mock. Returns ``{labels, boxes, scores}`` (no masks)."""
-    model = MagicMock(name="GroundingDINOModel")
-
-    def _default_invoke(inp):  # noqa: ARG001
-        return {
-            "labels": ["object"],
             "boxes": torch.tensor([[0.0, 0.0, 1.0, 1.0]]),
             "scores": torch.tensor([0.5]),
         }

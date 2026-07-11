@@ -1,9 +1,4 @@
-"""Tests for src/query/detect.py.
-
-Parametrized so each behavior is exercised twice — once with a SAM-shaped
-detector (returns ``masks``) and once with a Grounding-DINO-shaped one
-(returns ``labels``).
-"""
+"""Tests for src/query/detect.py."""
 
 from __future__ import annotations
 
@@ -14,48 +9,15 @@ from src.data_model import SearchState
 from src.query import Detect
 
 
-# --- detector flavor matrix ------------------------------------------------
-
-SAM_FLAVOR = "sam"
-DINO_FLAVOR = "dino"
-
-
-@pytest.fixture
-def detector_flavor(request):
-    """Indirect parametrization: yields (flavor_name, mock_detector, build_output)."""
-    flavor = request.param
-    if flavor == SAM_FLAVOR:
-        mock = request.getfixturevalue("mock_sam_model")
-
-        def build(scores):
-            return {
-                "masks": [torch.zeros(2, 2, dtype=torch.bool)],
-                "boxes": torch.tensor([[0.0, 0.0, 1.0, 1.0]]),
-                "scores": scores,
-            }
-    elif flavor == DINO_FLAVOR:
-        mock = request.getfixturevalue("mock_dino_model")
-
-        def build(scores):
-            return {
-                "labels": ["object"],
-                "boxes": torch.tensor([[0.0, 0.0, 1.0, 1.0]]),
-                "scores": scores,
-            }
-    else:
-        raise ValueError(flavor)
-
-    return flavor, mock, build
+def _sam_output(scores):
+    return {
+        "masks": [torch.zeros(2, 2, dtype=torch.bool)],
+        "boxes": torch.tensor([[0.0, 0.0, 1.0, 1.0]]),
+        "scores": scores,
+    }
 
 
-# --- core behaviors (run on both detectors) --------------------------------
-
-
-@pytest.mark.parametrize(
-    "detector_flavor", [SAM_FLAVOR, DINO_FLAVOR], indirect=True
-)
-def test_invoke_sets_detected_with_max_score(detector_flavor, retrieved_from):
-    flavor, mock, build = detector_flavor
+def test_invoke_sets_detected_with_max_score(mock_sam_model, retrieved_from):
     retrieved = retrieved_from(3)
 
     score_seq = [
@@ -68,12 +30,12 @@ def test_invoke_sets_detected_with_max_score(detector_flavor, retrieved_from):
     def _invoke(_):
         i = call_idx["i"]
         call_idx["i"] += 1
-        return build(score_seq[i])
+        return _sam_output(score_seq[i])
 
-    mock.invoke.side_effect = _invoke
+    mock_sam_model.invoke.side_effect = _invoke
 
     state = SearchState(query="q", collection_id="c", retrieved=retrieved)
-    out = Detect(mock).invoke(state)
+    out = Detect(mock_sam_model).invoke(state)
 
     assert out.detected is not None and len(out.detected) == 3
     # detection_score is max(scores) per image.
@@ -84,49 +46,34 @@ def test_invoke_sets_detected_with_max_score(detector_flavor, retrieved_from):
     assert [d.id for d in out.detected] == [r.id for r in retrieved]
 
 
-@pytest.mark.parametrize(
-    "detector_flavor", [SAM_FLAVOR, DINO_FLAVOR], indirect=True
-)
-def test_invoke_handles_empty_score_tensor(detector_flavor, retrieved_from):
-    _, mock, _ = detector_flavor
+def test_invoke_handles_empty_score_tensor(mock_sam_model, retrieved_from):
     retrieved = retrieved_from(1)
-    mock.invoke.side_effect = lambda _: {
+    mock_sam_model.invoke.side_effect = lambda _: {
         "boxes": torch.zeros(0, 4),
         "scores": torch.zeros(0),
     }
 
     state = SearchState(query="q", collection_id="c", retrieved=retrieved)
-    out = Detect(mock).invoke(state)
+    out = Detect(mock_sam_model).invoke(state)
 
     assert out.detected[0].detection_score == 0.0
 
 
-@pytest.mark.parametrize(
-    "detector_flavor", [SAM_FLAVOR, DINO_FLAVOR], indirect=True
-)
-def test_invoke_passes_query_as_prompt(detector_flavor, retrieved_from):
-    _, mock, _ = detector_flavor
+def test_invoke_passes_query_as_prompt(mock_sam_model, retrieved_from):
     retrieved = retrieved_from(2)
     state = SearchState(query="laptop", collection_id="c", retrieved=retrieved)
-    Detect(mock).invoke(state)
+    Detect(mock_sam_model).invoke(state)
 
-    for call in mock.invoke.call_args_list:
+    for call in mock_sam_model.invoke.call_args_list:
         (payload,) = call.args
         assert payload["text"] == "laptop"
         assert payload["image"] is not None
 
 
-@pytest.mark.parametrize(
-    "detector_flavor", [SAM_FLAVOR, DINO_FLAVOR], indirect=True
-)
-def test_invoke_rejects_missing_retrieved(detector_flavor):
-    _, mock, _ = detector_flavor
+def test_invoke_rejects_missing_retrieved(mock_sam_model):
     state = SearchState(query="q", collection_id="c")
     with pytest.raises(ValueError, match="retrieved"):
-        Detect(mock).invoke(state)
-
-
-# --- detector-specific output keys -----------------------------------------
+        Detect(mock_sam_model).invoke(state)
 
 
 def test_lazy_loads_unloaded_images_from_path(mock_sam_model, tiny_image_files):
@@ -160,19 +107,20 @@ def test_unloaded_image_without_path_raises(mock_sam_model):
         Detect(mock_sam_model).invoke(state)
 
 
-def test_sam_path_populates_masks_not_labels(mock_sam_model, retrieved_from):
+def test_masks_populated_when_detector_returns_them(mock_sam_model, retrieved_from):
     retrieved = retrieved_from(1)
     state = SearchState(query="q", collection_id="c", retrieved=retrieved)
     out = Detect(mock_sam_model).invoke(state)
-    d = out.detected[0]
-    assert d.masks is not None
-    assert d.labels is None
+    assert out.detected[0].masks is not None
 
 
-def test_dino_path_populates_labels_not_masks(mock_dino_model, retrieved_from):
+def test_masks_none_when_detector_omits_them(mock_sam_model, retrieved_from):
+    """Detect is duck-typed: a detector returning no masks leaves the slot None."""
     retrieved = retrieved_from(1)
+    mock_sam_model.invoke.side_effect = lambda _: {
+        "boxes": torch.tensor([[0.0, 0.0, 1.0, 1.0]]),
+        "scores": torch.tensor([0.5]),
+    }
     state = SearchState(query="q", collection_id="c", retrieved=retrieved)
-    out = Detect(mock_dino_model).invoke(state)
-    d = out.detected[0]
-    assert d.labels == ["object"]
-    assert d.masks is None
+    out = Detect(mock_sam_model).invoke(state)
+    assert out.detected[0].masks is None

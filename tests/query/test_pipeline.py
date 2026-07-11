@@ -155,8 +155,6 @@ def _write_cfg(tmp_path, db_dir, query_section=None, projection_section=None):
             "siglip": {"model_id": "x", "device": "cpu", "batch_size": 1},
             "sam": {"model_id": "y", "device": "cpu",
                     "threshold": 0.5, "mask_threshold": 0.5},
-            "grounding_dino": {"model_id": "z", "device": "cpu",
-                               "box_threshold": 0.35, "text_threshold": 0.25},
         },
         "indexing": {"db_path": str(db_dir)},
     }

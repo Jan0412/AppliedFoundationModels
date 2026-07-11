@@ -1,4 +1,4 @@
-"""Step 3 — run a detector (SAM, Grounding DINO, …) on each retrieved image."""
+"""Step 3 — run the detector on each retrieved image."""
 
 from __future__ import annotations
 
@@ -15,14 +15,9 @@ class Detect(Runnable):
 
     The detector is **duck-typed**: anything whose
     ``invoke({"image": pil, "text": str})`` returns a dict containing at
-    least ``scores`` and ``boxes`` slots in (both :class:`SAMModel` and
-    :class:`GroundingDINOModel` satisfy this).
-
-    Optional output keys are copied through to the resulting
-    :class:`DetectedImage`:
-
-    - ``masks``  — SAM only; stays ``None`` when absent.
-    - ``labels`` — Grounding DINO only; stays ``None`` when absent.
+    least ``scores`` and ``boxes`` slots in (:class:`SAMModel` satisfies
+    this). ``masks`` is copied through to the resulting
+    :class:`DetectedImage` when present and stays ``None`` when absent.
 
     ``detection_score`` is ``float(scores.max())`` when the score tensor
     is non-empty, else ``0.0`` (so images the detector couldn't ground
@@ -63,7 +58,6 @@ class Detect(Runnable):
                     boxes=out["boxes"].cpu(),
                     scores=scores,
                     masks=[m.cpu() for m in out["masks"]] if "masks" in out else None,
-                    labels=list(out["labels"]) if "labels" in out else None,
                     depth_path=ri.depth_path,
                     cam2world=ri.cam2world,
                 )

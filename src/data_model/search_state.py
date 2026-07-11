@@ -109,15 +109,14 @@ class RetrievalDiagnostics(BaseModel):
 
 
 class DetectedImage(BaseModel):
-    """One candidate after a detector (SAM, Grounding DINO, …) has run on it.
+    """One candidate after the detector has run on it.
 
     The scalar fields (``id``, ``path``, ``similarity_score``) are carried
     over from the upstream :class:`RetrievedImage` so the rerank step never
     has to look back at ``state.retrieved`` to recover provenance.
 
-    ``masks`` and ``labels`` are detector-dependent: SAM produces ``masks``,
-    Grounding DINO produces ``labels``. Whichever the chosen detector did
-    not return is left ``None`` — downstream code branches with
+    ``masks`` is detector-dependent: a detector that returns no masks leaves
+    it ``None`` — downstream code branches with
     ``if img.masks is not None: ...``.
 
     Attributes:
@@ -128,8 +127,7 @@ class DetectedImage(BaseModel):
                            or ``0.0`` if the detector returned no items.
         boxes:             ``(N, 4)`` float tensor of bounding boxes.
         scores:            Full detector confidence tensor.
-        masks:             SAM-only: list of boolean tensors, one per segment.
-        labels:            Grounding-DINO-only: list of matched label strings.
+        masks:             List of boolean tensors, one per segment.
         depth_path:        Paired depth-map path carried from retrieval (for 3D
                            back-projection); "" if none.
         cam2world:         ``(4, 4)`` camera-to-world pose carried from retrieval,
@@ -143,7 +141,6 @@ class DetectedImage(BaseModel):
     boxes: torch.Tensor
     scores: torch.Tensor
     masks: Optional[list[Any]] = None
-    labels: Optional[list[str]] = None
     depth_path: str = ""
     cam2world: Optional[np.ndarray] = None
 
@@ -194,11 +191,12 @@ class SearchState(BaseModel):
         n_diverse:       Per-query override of how many viewpoint-diverse
                          frames :class:`SelectDiverse` keeps; ``None`` uses
                          the step default.
-        fuse:            Per-query override of the 3D fuse mode
-                         (``"single"`` one fused object | ``"instances"``
-                         one object per DBSCAN cluster, most consensus
-                         first); ``None`` uses the :class:`ProjectTo3D`
-                         default.
+        mode:            Per-query override of the 3D projection mode
+                         (``"simple"`` no clustering, one object |
+                         ``"cluster_single"`` largest DBSCAN cluster, one
+                         fused object | ``"cluster_instances"`` one object per
+                         DBSCAN cluster, most consensus first); ``None`` uses
+                         the :class:`ProjectTo3D` default.
 
         query_embedding: Set by :class:`EmbedQuery`. 1-D, L2-normalised.
         retrieved:       Set by :class:`RetrieveSimilar` (images unloaded);
@@ -210,10 +208,10 @@ class SearchState(BaseModel):
         results:         Set by :class:`RerankByDetection`
                          (sorted desc by ``detection_score``, trimmed).
         projected:       Set by :class:`ProjectTo3D` — the fused
-                         :class:`ProjectedObject` (s): one in ``"single"``
-                         fuse mode, one per cluster (largest first) in
-                         ``"instances"`` mode, or empty when nothing could
-                         be back-projected.
+                         :class:`ProjectedObject` (s): one in ``"simple"`` /
+                         ``"cluster_single"`` mode, one per cluster (largest
+                         first) in ``"cluster_instances"`` mode, or empty when
+                         nothing could be back-projected.
     """
 
     query: str
@@ -222,7 +220,7 @@ class SearchState(BaseModel):
     top_k_final: int = 5
     retrieval_mode: Optional[Literal["topk", "dynamic"]] = None
     n_diverse: Optional[int] = None
-    fuse: Optional[Literal["single", "instances"]] = None
+    mode: Optional[Literal["simple", "cluster_single", "cluster_instances"]] = None
 
     query_embedding: Optional[np.ndarray] = None
     retrieved: Optional[list[RetrievedImage]] = None
