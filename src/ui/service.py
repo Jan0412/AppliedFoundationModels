@@ -84,10 +84,14 @@ class SceneService:
         collection_id: str,
         *,
         mode: Optional[str] = None,
-        top_k_final: int = 5,
+        top_k_final: Optional[int] = None,
         retrieval_mode: Optional[str] = None,
     ) -> SearchState:
         """Run the full search chain and return the finished state.
+
+        ``mode`` / ``top_k_final`` / ``retrieval_mode`` are per-query overrides;
+        left ``None`` they fall back to the pipeline's configured defaults from
+        ``config.yaml`` (so the app doesn't have to restate them).
 
         The state carries both the 3D objects (``projected``) and the 2D frames
         that produced them (``results``), so the caller can show the evidence
