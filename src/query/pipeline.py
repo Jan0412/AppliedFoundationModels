@@ -75,6 +75,7 @@ class Search2D:
         db,
         *,
         retrieval_mode: str = "dynamic",
+        top_k_final: int = 5,
         min_k: int = 10,
         max_k: int = 400,
         min_separability: float = 0.75,
@@ -100,7 +101,7 @@ class Search2D:
         )
         self.select = SelectDiverse(db, n_diverse=n_diverse, patch_frac=patch_frac)
         self.detect = Detect(detector)
-        self.rerank = RerankByDetection()
+        self.rerank = RerankByDetection(top_k_final=top_k_final)
         self.project = ProjectTo3D(
             db,
             voxel=voxel,
@@ -152,6 +153,7 @@ class Search2D:
             detector=det,
             db=db,
             retrieval_mode=qcfg.get("retrieval_mode", "dynamic"),
+            top_k_final=qcfg.get("top_k_final", 5),
             min_k=qcfg.get("min_k", 10),
             max_k=qcfg.get("max_k", 400),
             min_separability=qcfg.get("min_separability", 0.75),
@@ -174,7 +176,7 @@ class Search2D:
         query: Optional[str] = None,
         collection_id: Optional[str] = None,
         top_k_retrieve: int = 20,
-        top_k_final: int = 5,
+        top_k_final: Optional[int] = None,
         retrieval_mode: Optional[str] = None,
         n_diverse: Optional[int] = None,
         mode: Optional[str] = None,
@@ -182,10 +184,10 @@ class Search2D:
         """Run the full chain.
 
         Accepts either a pre-built :class:`SearchState` or the constructor
-        kwargs. ``retrieval_mode`` / ``n_diverse`` / ``mode`` override the
-        configured step defaults for this query only (``top_k_retrieve``
-        applies in ``"topk"`` mode only). Returns the final state with
-        ``results`` set.
+        kwargs. ``retrieval_mode`` / ``top_k_final`` / ``n_diverse`` / ``mode``
+        override the configured step defaults for this query only, falling back
+        to them when ``None`` (``top_k_retrieve`` applies in ``"topk"`` mode
+        only). Returns the final state with ``results`` set.
         """
         if state is None:
             if query is None or collection_id is None:

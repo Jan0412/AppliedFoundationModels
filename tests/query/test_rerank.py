@@ -38,6 +38,27 @@ def test_invoke_handles_top_k_larger_than_input(detected_factory):
     assert [r.detection_score for r in out.results] == [0.5, 0.3]
 
 
+def test_invoke_uses_constructor_default_when_state_unset(detected_factory):
+    """state.top_k_final=None falls back to the configured (constructor) count."""
+    detected = detected_factory([0.1, 0.9, 0.4, 0.7])
+    state = SearchState(query="q", collection_id="c", detected=detected)
+    assert state.top_k_final is None
+
+    out = RerankByDetection(top_k_final=2).invoke(state)
+
+    assert [r.detection_score for r in out.results] == [0.9, 0.7]
+
+
+def test_invoke_state_overrides_constructor_default(detected_factory):
+    """A per-query state.top_k_final wins over the configured default."""
+    detected = detected_factory([0.1, 0.9, 0.4, 0.7])
+    state = SearchState(query="q", collection_id="c", top_k_final=1, detected=detected)
+
+    out = RerankByDetection(top_k_final=5).invoke(state)
+
+    assert [r.detection_score for r in out.results] == [0.9]
+
+
 def test_invoke_does_not_mutate_detected(detected_factory):
     detected = detected_factory([0.1, 0.9, 0.4])
     state = SearchState(

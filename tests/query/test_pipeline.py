@@ -206,6 +206,7 @@ def test_from_config_without_query_section_uses_defaults(
     assert pipeline.retrieve.max_k == 400
     assert pipeline.retrieve.strategy == "tail"
     assert pipeline.select.n_diverse == 10
+    assert pipeline.rerank.top_k_final == 5
     # Projection defaults (no projection section present).
     assert pipeline.project.mode == "cluster_single"
     assert pipeline.project.max_instances is None
@@ -220,6 +221,7 @@ def test_from_config_reads_query_section(
         tmp_path / "db",
         query_section={
             "retrieval_mode": "topk",
+            "top_k_final": 8,
             "strategy": "plain",
             "min_k": 3,
             "max_k": 50,
@@ -245,6 +247,7 @@ def test_from_config_reads_query_section(
     assert pipeline.retrieve.min_separability == 0.8
     assert pipeline.select.n_diverse == 7
     assert pipeline.select.patch_frac == 0.3
+    assert pipeline.rerank.top_k_final == 8
 
 
 def test_from_config_reads_projection_section(
