@@ -119,10 +119,34 @@ def clear_highlights(handles: list) -> None:
         handle.remove()
 
 
-def results_markdown(state: SearchState) -> str:
-    """Summarise a finished query: what was found, and how retrieval got there."""
+def best_detection_score(state: SearchState) -> float:
+    """Highest SAM detection confidence among the kept results (``0.0`` if none).
+
+    This is the presence signal the UI trusts: SAM only returns groundings above
+    its own threshold, so this is ``0.0`` when the object was found nowhere, and
+    a calibrated confidence otherwise.
+    """
+    return max((h.detection_score for h in state.results or []), default=0.0)
+
+
+def results_markdown(state: SearchState, *, detection_warn_threshold: float = 0.6) -> str:
+    """Summarise a finished query: what was found, and how confident SAM is.
+
+    The presence signal is SAM's detection confidence (does the detector
+    actually ground the object in the candidate frames), not SigLIP
+    separability — the latter is a weak signal for hard concepts and is kept
+    only as a secondary retrieval diagnostic (the ``η`` figure).
+
+    Args:
+        state:                   The finished search state.
+        detection_warn_threshold: Below this best SAM confidence (but above 0),
+                                  the match is flagged as weak. Since SAM
+                                  already filters at its own threshold, values
+                                  above that floor are the meaningful range.
+    """
     n_objects = len(state.projected or [])
     n_frames = len(state.results or [])
+    best = best_detection_score(state)
 
     if n_objects == 0:
         head = f"**No 3D object found** for _{state.query}_."
@@ -133,24 +157,42 @@ def results_markdown(state: SearchState) -> str:
             f"from {n_frames} supporting frame(s)."
         )
 
-    lines = [head]
-
+    # Diagnostics: SAM confidence first (the presence signal), then how the
+    # retrieval pool was formed (η kept for observability, not as a warning).
+    detail = [f"detection {best:.2f}"]
     diag = state.retrieval_diag
     if diag is not None:
-        lines.append("")
-        detail = [f"retrieval `{diag.mode}`", f"pool {diag.pool_size}"]
+        detail.append(f"retrieval `{diag.mode}`")
+        pool = f"pool {diag.pool_size}"
         if diag.total_frames:
-            detail[-1] = f"pool {diag.pool_size}/{diag.total_frames}"
+            pool = f"pool {diag.pool_size}/{diag.total_frames}"
+        detail.append(pool)
         if diag.n_selected is not None:
             detail.append(f"{diag.n_selected} diverse frames")
         if diag.separability is not None:
             detail.append(f"η {diag.separability:.2f}")
-        lines.append(" · ".join(detail))
-        if diag.gated:
-            lines.append("")
-            lines.append(
-                "⚠️ Low separability — the scene probably does not contain this object."
-            )
+
+    lines = [head, "", " · ".join(detail)]
+
+    # Presence warning, driven by SAM rather than SigLIP separability.
+    if best <= 0.0:
+        lines += [
+            "",
+            f"⚠️ SAM did not detect _{state.query}_ in any candidate frame — "
+            "it is probably not in this scene.",
+        ]
+    elif n_objects == 0:
+        lines += [
+            "",
+            f"ℹ️ Detected in 2D (confidence {best:.2f}) but could not be placed "
+            "in 3D — the supporting frames lack usable depth/pose.",
+        ]
+    elif best < detection_warn_threshold:
+        lines += [
+            "",
+            f"⚠️ Weak detection (best confidence {best:.2f}) — "
+            "this highlight may be a false positive.",
+        ]
 
     return "\n".join(lines)
 

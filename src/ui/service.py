@@ -50,6 +50,9 @@ class SceneService:
             voxel=ui.get("voxel", 0.02),
         )
         self.voxel = self.cache.voxel
+        # Best SAM confidence below which a match is flagged weak in the UI.
+        # SAM already filters at its own threshold, so this sits above that floor.
+        self.detection_warn_threshold = ui.get("detection_warn_threshold", 0.6)
 
         self._pipeline: Optional[Search2D] = None
         self._ingestor: Optional[VideoIngestor] = None

@@ -20,6 +20,23 @@ def _state(**kw):
     return SearchState(**base)
 
 
+def _hit(detection_score: float):
+    """A minimal DetectedImage carrying a SAM detection score."""
+    return DetectedImage(
+        id="x", path="p.png", similarity_score=0.1,
+        detection_score=detection_score,
+        boxes=torch.zeros((0, 4)), scores=torch.zeros((0,)),
+    )
+
+
+def _obj():
+    return ProjectedObject(
+        id="obj-0", path="",
+        points=np.zeros((5, 3), dtype=np.float32), colors=None,
+        bbox=np.array([[0, 0, 0], [1, 1, 1]], dtype=np.float32),
+    )
+
+
 def test_object_color_cycles_through_the_palette():
     assert render.object_color(0) == render.OBJ_COLORS[0]
     assert render.object_color(len(render.OBJ_COLORS)) == render.OBJ_COLORS[0]
@@ -31,26 +48,27 @@ def test_box_edges_reference_all_eight_corners():
 
 
 def test_results_markdown_reports_objects_and_diagnostics():
-    obj = ProjectedObject(
-        id="obj-0",
-        path="",
-        points=np.zeros((5, 3), dtype=np.float32),
-        colors=None,
-        bbox=np.array([[0, 0, 0], [1, 1, 1]], dtype=np.float32),
-    )
     diag = RetrievalDiagnostics(
         mode="dynamic", pool_size=12, total_frames=200,
         n_selected=10, separability=0.83,
     )
     md = render.results_markdown(_state(
-        projected=[obj],
-        results=[],
+        projected=[_obj()],
+        results=[_hit(0.87)],
         retrieval_diag=diag,
     ))
     assert "1 object" in md
     assert "chair" in md
     assert "12/200" in md
     assert "dynamic" in md
+    assert "detection 0.87" in md      # SAM confidence surfaced
+    assert "η 0.83" in md              # separability kept as a diagnostic
+
+
+def test_best_detection_score_is_the_max_over_results():
+    state = _state(results=[_hit(0.4), _hit(0.9), _hit(0.6)])
+    assert render.best_detection_score(state) == 0.9
+    assert render.best_detection_score(_state(results=[])) == 0.0
 
 
 def test_results_markdown_handles_no_result():
@@ -58,10 +76,35 @@ def test_results_markdown_handles_no_result():
     assert "No 3D object" in md
 
 
-def test_results_markdown_warns_when_gated():
-    diag = RetrievalDiagnostics(mode="dynamic", pool_size=10, gated=True)
-    md = render.results_markdown(_state(projected=[], results=[], retrieval_diag=diag))
-    assert "separability" in md.lower()
+def test_warns_when_sam_detects_nothing():
+    """best == 0 → the object was grounded in no frame → probably absent."""
+    md = render.results_markdown(_state(projected=[], results=[_hit(0.0)]))
+    assert "did not detect" in md.lower()
+    assert "separability" not in md.lower()   # no longer the SigLIP-based warning
+
+
+def test_warns_on_weak_detection():
+    md = render.results_markdown(
+        _state(projected=[_obj()], results=[_hit(0.53)]),
+        detection_warn_threshold=0.6,
+    )
+    assert "weak detection" in md.lower()
+    assert "0.53" in md
+
+
+def test_confident_detection_has_no_warning():
+    md = render.results_markdown(
+        _state(projected=[_obj()], results=[_hit(0.92)]),
+        detection_warn_threshold=0.6,
+    )
+    assert "⚠️" not in md
+
+
+def test_detected_in_2d_but_not_placed_in_3d():
+    """SAM grounded it (best > 0) but nothing back-projected (no object)."""
+    md = render.results_markdown(_state(projected=[], results=[_hit(0.8)]))
+    assert "2D" in md
+    assert "did not detect" not in md.lower()   # it WAS detected, just not placed
 
 
 def test_mask_overlay_draws_on_the_frame(tmp_path):

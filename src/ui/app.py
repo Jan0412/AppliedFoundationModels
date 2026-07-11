@@ -148,7 +148,9 @@ class SceneApp:
             point_size=self.service.voxel,
             query=query,
         )
-        self.results_md.content = render.results_markdown(state)
+        self.results_md.content = render.results_markdown(
+            state, detection_warn_threshold=self.service.detection_warn_threshold
+        )
         self._show_evidence(state, query)
 
     def _show_evidence(self, state, query: str) -> None:
