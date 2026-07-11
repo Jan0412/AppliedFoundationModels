@@ -184,7 +184,9 @@ class SearchState(BaseModel):
         top_k_retrieve:  Candidate pool size from LanceDB (>= top_k_final).
                          Only used in ``"topk"`` retrieval mode — dynamic
                          mode sizes the pool from the score distribution.
-        top_k_final:     Final number of results after re-ranking.
+        top_k_final:     Per-query override of how many results
+                         :class:`RerankByDetection` keeps; ``None`` uses the
+                         step default.
         retrieval_mode:  Per-query override of the retrieval mode
                          (``"topk"`` fixed-k | ``"dynamic"`` Otsu pool);
                          ``None`` uses the :class:`RetrieveSimilar` default.
@@ -217,7 +219,7 @@ class SearchState(BaseModel):
     query: str
     collection_id: str
     top_k_retrieve: int = 20
-    top_k_final: int = 5
+    top_k_final: Optional[int] = None
     retrieval_mode: Optional[Literal["topk", "dynamic"]] = None
     n_diverse: Optional[int] = None
     mode: Optional[Literal["simple", "cluster_single", "cluster_instances"]] = None

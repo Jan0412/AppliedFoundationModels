@@ -16,6 +16,7 @@ indexing:
 
 query:
   retrieval_mode: "dynamic"   # "topk" = legacy fixed-k | "dynamic" = Otsu-sized pool
+  top_k_final: 5              # results kept after detector rerank (per-query overridable)
   strategy: "tail"            # Otsu variant for the pool threshold; "plain" keeps ~60% of frames
   min_k: 10                   # pool floor + fallback size when the η gate fires
   max_k: 400                  # pool cap
