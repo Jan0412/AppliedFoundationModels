@@ -1,0 +1,41 @@
+# Build:  docker compose build
+# Run:    docker compose up
+# then open http://localhost:8080
+#
+# Requires the NVIDIA container toolkit on the host for GPU access.
+services:
+  ui:
+    build: .
+    image: afm-ui
+    ports:
+      - "8080:8080"
+    environment:
+      - HF_HOME=/hf-cache
+    volumes:
+      # The LanceDB store, the TUM datasets (rows store repo-relative paths),
+      # and the scene/ingest caches all live under ./data, mounted at the same
+      # /app/data the code writes to.
+      - ./data:/app/data
+
+      # Hugging Face cache, so SigLIP/SAM aren't re-downloaded each run (and any
+      # gated weights already accepted on the host are reused).
+      - ${HF_CACHE:-~/.cache/huggingface}:/hf-cache
+
+      # ScanNet mirror. ScanNet rows store ABSOLUTE paths, and the mock
+      # reconstructor reads scene0011_00 from here, so it must be mounted at the
+      # identical path, read-only.
+      - /storage/group/dataset_mirrors/scannet/scans:/storage/group/dataset_mirrors/scannet/scans:ro
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    # Verify checklist after `up`:
+    #   docker compose run --rm ui ls /app/data/lancedb           # store visible
+    #   docker compose run --rm ui ls /storage/group/dataset_mirrors/scannet/scans | head
+    #   docker compose run --rm ui nvidia-smi                     # GPU visible
+    #   curl -sf http://localhost:8080 >/dev/null && echo UI-OK   # UI reachable

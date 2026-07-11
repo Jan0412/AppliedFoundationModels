@@ -1,0 +1,21 @@
+# Data + caches are mounted at runtime, never baked into the image.
+data/
+.venv/
+.git/
+.github/
+
+# Not needed to run the UI.
+notebooks/
+tests/
+scripts/
+eval_results_*.json
+.coverage
+htmlcov/
+
+# Python / editor cruft.
+__pycache__/
+*.py[oc]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
