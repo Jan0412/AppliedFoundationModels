@@ -22,6 +22,9 @@ from src.utils.geometry import (
 
 logger = logging.getLogger(__name__)
 
+#: Valid projection modes (see :class:`ProjectTo3D`).
+_MODES = ("simple", "cluster_single", "cluster_instances")
+
 
 class ProjectTo3D(Runnable):
     """Back-project the final results and fuse them into 3D object(s).
@@ -31,21 +34,22 @@ class ProjectTo3D(Runnable):
     pose and the per-collection intrinsics + ``depth_scale`` (read from the
     LanceDB metadata table written at index time).
 
-    Points from **all** hits are then merged and run through DBSCAN. Objects
-    are consistent across frames and form dense clusters, while the per-frame
-    background (different from each viewpoint) scatters into noise and is
-    dropped: multi-frame consensus separates object from background.
+    Points from **all** hits are merged, then handled per ``mode`` (constructor
+    default, overridable per query via ``state.mode``):
 
-    Two fuse modes (constructor default, overridable per query via
-    ``state.fuse``):
-
-    - ``"single"`` — the largest cluster becomes one fused
-      :class:`ProjectedObject` (``id="fused"``). The right mode when the query
-      targets one unique object (e.g. the ScanRefer benchmark).
-    - ``"instances"`` — every cluster with at least ``min_instance_size``
-      points becomes its own :class:`ProjectedObject` (``id="obj-{i}"``),
-      sorted by point count descending — the most multi-frame consensus (most
-      probable object) first, so ``projected[0]`` matches single mode.
+    - ``"simple"`` — no clustering. Every back-projected point is kept as one
+      fused :class:`ProjectedObject` (``id="fused"``). No noise rejection or
+      instance splitting, so the box is looser but nothing is dropped.
+    - ``"cluster_single"`` — DBSCAN, then the largest cluster becomes one fused
+      :class:`ProjectedObject` (``id="fused"``). DBSCAN groups the object (dense,
+      consistent across frames) and drops the per-frame background (scattered
+      into noise): multi-frame consensus separates object from background. The
+      right mode when the query targets one unique object (e.g. ScanRefer).
+    - ``"cluster_instances"`` — DBSCAN, then every cluster with at least
+      ``min_instance_size`` points becomes its own :class:`ProjectedObject`
+      (``id="obj-{i}"``), sorted by point count descending — the most
+      multi-frame consensus (most probable object) first, so ``projected[0]``
+      matches ``cluster_single``.
 
     The collection must have been indexed with depth + poses + calibration.
 
@@ -59,24 +63,24 @@ class ProjectTo3D(Runnable):
         self,
         db,
         voxel: float = 0.02,
+        mode: str = "cluster_single",
         cluster_eps: float = 0.05,
         cluster_min_samples: int = 10,
         bbox_percentile: Tuple[float, float] = (2.0, 98.0),
-        fuse: str = "single",
         max_instances: Optional[int] = None,
         min_instance_size: int = 50,
     ) -> None:
-        if fuse not in ("single", "instances"):
+        if mode not in _MODES:
             raise ValueError(
-                f"ProjectTo3D: unknown fuse mode {fuse!r}. "
-                "Expected 'single' or 'instances'."
+                f"ProjectTo3D: unknown mode {mode!r}. "
+                f"Expected one of {sorted(_MODES)}."
             )
         self.db = db
         self.voxel = voxel
+        self.mode = mode
         self.cluster_eps = cluster_eps
         self.cluster_min_samples = cluster_min_samples
         self.bbox_percentile = bbox_percentile
-        self.fuse = fuse
         self.max_instances = max_instances
         self.min_instance_size = min_instance_size
         self._meta_cache: dict[str, dict] = {}
@@ -168,9 +172,21 @@ class ProjectTo3D(Runnable):
         # 2. Even out density before clustering.
         ds_points, ds_colors = voxel_downsample(all_points, all_colors, self.voxel)
 
-        fuse = state.fuse or self.fuse
-        if fuse == "single":
-            # 3a. One fused object: dominant cluster + tight world box.
+        mode = state.mode or self.mode
+        if mode == "simple":
+            # 3a. No clustering — keep every back-projected point as one
+            # object, no noise rejection or instance splitting.
+            fused = ProjectedObject(
+                id="fused",
+                path="",
+                points=ds_points,
+                colors=ds_colors,
+                bbox=robust_bounds(ds_points, *self.bbox_percentile),
+            )
+            return state.model_copy(update={"projected": [fused]})
+
+        if mode == "cluster_single":
+            # 3b. One fused object: dominant cluster + tight world box.
             mask = largest_cluster(
                 ds_points, self.cluster_eps, self.cluster_min_samples
             )
@@ -185,7 +201,8 @@ class ProjectTo3D(Runnable):
             )
             return state.model_copy(update={"projected": [fused]})
 
-        # 3b. One object per cluster, most multi-frame consensus first.
+        # 3c. cluster_instances: one object per cluster, most multi-frame
+        # consensus first.
         masks = cluster_masks(
             ds_points,
             eps=self.cluster_eps,

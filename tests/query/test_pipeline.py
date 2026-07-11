@@ -209,7 +209,7 @@ def test_from_config_without_query_section_uses_defaults(
     assert pipeline.retrieve.strategy == "tail"
     assert pipeline.select.n_diverse == 10
     # Projection defaults (no projection section present).
-    assert pipeline.project.fuse == "single"
+    assert pipeline.project.mode == "cluster_single"
     assert pipeline.project.max_instances is None
     assert pipeline.project.min_instance_size == 50
 
@@ -256,7 +256,7 @@ def test_from_config_reads_projection_section(
         tmp_path,
         tmp_path / "db",
         projection_section={
-            "fuse": "instances",
+            "mode": "cluster_instances",
             "max_instances": 5,
             "min_instance_size": 30,
             "cluster_eps": 0.08,
@@ -272,7 +272,7 @@ def test_from_config_reads_projection_section(
     ):
         pipeline = Search2D.from_config(cfg_path)
 
-    assert pipeline.project.fuse == "instances"
+    assert pipeline.project.mode == "cluster_instances"
     assert pipeline.project.max_instances == 5
     assert pipeline.project.min_instance_size == 30
     assert pipeline.project.cluster_eps == 0.08

@@ -104,7 +104,7 @@ def test_raises_when_no_source_lists(populated_db):
 
 
 # ---------------------------------------------------------------------------
-# instances fuse mode
+# cluster_instances mode
 # ---------------------------------------------------------------------------
 
 
@@ -120,7 +120,7 @@ def test_instances_mode_one_object_per_cluster(populated_db):
         _detected(populated_db, frame=0),                            # near origin
         _detected(populated_db, frame=1, cam2world=_pose([10, 10, 10])),
     ]
-    out = _projector(populated_db, fuse="instances", min_instance_size=1).invoke(
+    out = _projector(populated_db, mode="cluster_instances", min_instance_size=1).invoke(
         _state(populated_db, hits)
     )
 
@@ -143,7 +143,7 @@ def test_instances_sorted_largest_first(populated_db):
         _detected(populated_db, frame=1, mask=small, cam2world=_pose([10, 10, 10])),
         _detected(populated_db, frame=0),   # deliberately last in input
     ]
-    out = _projector(populated_db, fuse="instances", min_instance_size=1).invoke(
+    out = _projector(populated_db, mode="cluster_instances", min_instance_size=1).invoke(
         _state(populated_db, hits)
     )
 
@@ -159,7 +159,7 @@ def test_instances_max_instances_caps_count(populated_db):
         _detected(populated_db, frame=1, cam2world=_pose([10, 10, 10])),
     ]
     out = _projector(
-        populated_db, fuse="instances", min_instance_size=1, max_instances=1
+        populated_db, mode="cluster_instances", min_instance_size=1, max_instances=1
     ).invoke(_state(populated_db, hits))
 
     assert len(out.projected) == 1
@@ -174,20 +174,22 @@ def test_instances_min_size_drops_small_cluster(populated_db):
         _detected(populated_db, frame=1, mask=small, cam2world=_pose([10, 10, 10])),
     ]
     out = _projector(
-        populated_db, fuse="instances", min_instance_size=10
+        populated_db, mode="cluster_instances", min_instance_size=10
     ).invoke(_state(populated_db, hits))
 
     assert len(out.projected) == 1
     assert out.projected[0].points.shape[0] == 64
 
 
-def test_state_fuse_overrides_constructor(populated_db):
+def test_state_mode_overrides_constructor(populated_db):
     hits = [
         _detected(populated_db, frame=0),
         _detected(populated_db, frame=1, cam2world=_pose([10, 10, 10])),
     ]
-    proj = _projector(populated_db, fuse="single", min_instance_size=1)
-    state = _state(populated_db, hits).model_copy(update={"fuse": "instances"})
+    proj = _projector(populated_db, mode="cluster_single", min_instance_size=1)
+    state = _state(populated_db, hits).model_copy(
+        update={"mode": "cluster_instances"}
+    )
 
     out = proj.invoke(state)
 
@@ -199,12 +201,30 @@ def test_single_mode_unchanged_by_default(populated_db):
         _detected(populated_db, frame=0),
         _detected(populated_db, frame=1, cam2world=_pose([10, 10, 10])),
     ]
-    # Default fuse="single" collapses everything to the largest cluster.
+    # Default mode="cluster_single" collapses everything to the largest cluster.
     out = _projector(populated_db).invoke(_state(populated_db, hits))
     assert len(out.projected) == 1
     assert out.projected[0].id == "fused"
 
 
-def test_unknown_fuse_mode_raises(populated_db):
-    with pytest.raises(ValueError, match="fuse"):
-        ProjectTo3D(populated_db["db"], fuse="bogus")
+def test_simple_mode_keeps_all_points_no_clustering(populated_db):
+    # Two frames whose points are far apart (10 m). cluster_single would drop
+    # one via DBSCAN; simple mode keeps every point in one object.
+    hits = [
+        _detected(populated_db, frame=0),
+        _detected(populated_db, frame=1, cam2world=_pose([10, 10, 10])),
+    ]
+    # eps small enough that the two groups would NOT merge under DBSCAN.
+    proj = ProjectTo3D(
+        populated_db["db"], mode="simple", voxel=0.0
+    )
+    out = proj.invoke(_state(populated_db, hits))
+
+    assert len(out.projected) == 1
+    assert out.projected[0].id == "fused"
+    assert out.projected[0].points.shape[0] == 128   # all points from both frames
+
+
+def test_unknown_mode_raises(populated_db):
+    with pytest.raises(ValueError, match="mode"):
+        ProjectTo3D(populated_db["db"], mode="bogus")
