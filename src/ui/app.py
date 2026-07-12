@@ -22,13 +22,11 @@ from pathlib import Path
 import viser
 import yaml
 
-from . import render
+from . import render, settings
 from .service import SceneService
 
 #: How often the ingest poller re-reads the job (seconds).
 POLL_INTERVAL = 0.3
-
-PROJECTION_MODES = ("cluster_single", "cluster_instances", "simple")
 
 
 class SceneApp:
@@ -70,14 +68,14 @@ class SceneApp:
 
         with gui.add_folder("Query"):
             self.query_input = gui.add_text("Text", initial_value="")
-            self.mode_dropdown = gui.add_dropdown(
-                "Projection", options=PROJECTION_MODES
-            )
             self.search_button = gui.add_button("Search", icon=viser.Icon.SEARCH)
             self.clear_button = gui.add_button("Clear results")
             self.results_md = gui.add_markdown("")
 
         self.evidence_folder = gui.add_folder("Evidence", expand_by_default=False)
+
+        # Last in the panel: tuning is occasional, the evidence is per-query.
+        self._build_config_gui(gui)
 
         self.scene_dropdown.on_update(lambda _: self._spawn(self._load_scene))
         self.upload_button.on_upload(lambda _: self._spawn(self._start_ingest))
@@ -86,6 +84,64 @@ class SceneApp:
 
         if scenes:
             self._spawn(self._load_scene)
+
+    def _build_config_gui(self, gui) -> None:
+        """The Configuration panel — every query/projection knob, live.
+
+        The steps re-read their attributes on each invoke, so these apply to the
+        next Search without reloading SigLIP or SAM. Widgets are generated from
+        :data:`src.ui.settings.FIELDS`, so adding a knob there adds it here.
+        """
+        values = self.service.settings()
+        self.config_widgets: dict = {}
+
+        self.config_folder = gui.add_folder("Configuration", expand_by_default=False)
+        with self.config_folder:
+            for title, fields in (
+                ("Retrieval", settings.RETRIEVAL_FIELDS),
+                ("Projection", settings.PROJECTION_FIELDS),
+            ):
+                with gui.add_folder(title):
+                    for field in fields:
+                        self.config_widgets[field.key] = self._add_field_widget(
+                            gui, field, values[field.key]
+                        )
+            self.reset_button = gui.add_button(
+                "Reset to config.yaml", icon=viser.Icon.REFRESH
+            )
+            self.config_note = gui.add_markdown(
+                "_Applies to the next Search — existing results are not "
+                "re-projected._"
+            )
+
+        self.reset_button.on_click(lambda _: self._reset_config())
+
+    def _add_field_widget(self, gui, field, value):
+        """One widget for one :class:`~src.ui.settings.Field`, wired to the service."""
+        if field.kind == "choice":
+            widget = gui.add_dropdown(
+                field.label, options=field.options, initial_value=value,
+                hint=field.help or None,
+            )
+        else:
+            widget = gui.add_slider(
+                field.label,
+                min=field.min, max=field.max, step=field.inc,
+                initial_value=value,
+                hint=field.help or None,
+            )
+        widget.on_update(
+            lambda _, key=field.key, w=widget: self.service.update_settings(
+                {key: w.value}
+            )
+        )
+        return widget
+
+    def _reset_config(self) -> None:
+        """Reload the knobs from config.yaml and push them back onto the widgets."""
+        values = self.service.reset_settings()
+        for key, widget in self.config_widgets.items():
+            widget.value = values[key]
 
     @staticmethod
     def _spawn(fn) -> None:
@@ -132,9 +188,9 @@ class SceneApp:
         self.search_button.disabled = True
         self.results_md.content = f"Searching for _{query}_ …"
         try:
-            state = self.service.query(
-                query, collection_id, mode=self.mode_dropdown.value
-            )
+            # No per-call overrides: the Configuration panel's staged settings
+            # (projection mode included) are applied inside service.query().
+            state = self.service.query(query, collection_id)
         except Exception as exc:
             self.results_md.content = f"❌ Query failed: {exc}"
             return

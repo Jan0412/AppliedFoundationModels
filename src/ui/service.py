@@ -25,6 +25,7 @@ from src.ingest import VideoIngestor, sanitize_collection_id
 from src.query import Search2D
 from src.utils.db import META_TABLE, connect
 
+from . import settings as settings_spec
 from .cache import SceneCloudCache
 
 
@@ -54,6 +55,13 @@ class SceneService:
         # SAM already filters at its own threshold, so this sits above that floor.
         self.detection_warn_threshold = ui.get("detection_warn_threshold", 0.6)
 
+        # Live pipeline knobs (the query/projection config sections). Held here
+        # rather than written straight to the pipeline: the UI edits them from
+        # viser's websocket thread while a query may be running on another, and
+        # the pipeline may not even be built yet. They are applied on the query
+        # thread, under _gpu_lock, in query().
+        self._settings = settings_spec.defaults_from_config(cfg)
+
         self._pipeline: Optional[Search2D] = None
         self._ingestor: Optional[VideoIngestor] = None
         self._model_lock = threading.Lock()
@@ -78,6 +86,29 @@ class SceneService:
         return self.cache.get(self.db, collection_id, force=force)
 
     # ------------------------------------------------------------------
+    # Settings
+    # ------------------------------------------------------------------
+
+    def settings(self) -> dict:
+        """The current pipeline knobs, keyed by :data:`src.ui.settings.FIELDS`."""
+        return dict(self._settings)
+
+    def update_settings(self, values: dict) -> None:
+        """Stage knob changes; they take effect on the next :meth:`query`.
+
+        Returns immediately — no lock, no model load — because this runs on the
+        UI's event thread. The values only reach the pipeline in :meth:`query`,
+        which is what keeps a mid-flight search from seeing half an update.
+        """
+        self._settings.update(values)
+
+    def reset_settings(self) -> dict:
+        """Re-read the knobs from ``config.yaml`` and return them."""
+        cfg = yaml.safe_load(self.config_path.read_text()) or {}
+        self._settings = settings_spec.defaults_from_config(cfg)
+        return dict(self._settings)
+
+    # ------------------------------------------------------------------
     # Query
     # ------------------------------------------------------------------
 
@@ -92,9 +123,11 @@ class SceneService:
     ) -> SearchState:
         """Run the full search chain and return the finished state.
 
-        ``mode`` / ``top_k_final`` / ``retrieval_mode`` are per-query overrides;
-        left ``None`` they fall back to the pipeline's configured defaults from
-        ``config.yaml`` (so the app doesn't have to restate them).
+        The staged settings (see :meth:`update_settings`) are written onto the
+        pipeline's steps first, so a knob the user moved in the panel applies to
+        this query. ``mode`` / ``top_k_final`` / ``retrieval_mode`` are per-call
+        overrides on top of that; left ``None`` they fall back to the values the
+        steps now hold.
 
         The state carries both the 3D objects (``projected``) and the 2D frames
         that produced them (``results``), so the caller can show the evidence
@@ -102,6 +135,7 @@ class SceneService:
         """
         pipeline = self._ensure_pipeline()
         with self._gpu_lock:
+            settings_spec.apply_settings(pipeline, self._settings)
             return pipeline.invoke(
                 query=text,
                 collection_id=collection_id,

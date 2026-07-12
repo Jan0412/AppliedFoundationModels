@@ -129,6 +129,25 @@ def best_detection_score(state: SearchState) -> float:
     return max((h.detection_score for h in state.results or []), default=0.0)
 
 
+def objects_table(projected: list[ProjectedObject]) -> str:
+    """Markdown table of the projected objects and their point counts.
+
+    The counts are post-voxel-downsample, the same unit as
+    ``projection.min_instance_size`` — so the table doubles as a guide for where
+    to set that floor. Objects arrive largest-first (most multi-frame consensus),
+    and that order is kept, matching the highlight colours in the viewport.
+
+    Returns the empty string when nothing was projected, so callers can append
+    it unconditionally.
+    """
+    if not projected:
+        return ""
+
+    lines = ["| Object | Points |", "| --- | ---: |"]
+    lines += [f"| {obj.id} | {len(obj.points):,} |" for obj in projected]
+    return "\n".join(lines)
+
+
 def results_markdown(state: SearchState, *, detection_warn_threshold: float = 0.6) -> str:
     """Summarise a finished query: what was found, and how confident SAM is.
 
@@ -193,6 +212,10 @@ def results_markdown(state: SearchState, *, detection_warn_threshold: float = 0.
             f"⚠️ Weak detection (best confidence {best:.2f}) — "
             "this highlight may be a false positive.",
         ]
+
+    table = objects_table(state.projected or [])
+    if table:
+        lines += ["", table]
 
     return "\n".join(lines)
 
