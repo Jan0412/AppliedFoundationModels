@@ -101,5 +101,25 @@ def test_missing_scene_raises_with_an_actionable_message(tmp_path):
         rec.reconstruct(["v.jpg"], "unused")
 
 
+def test_an_empty_scene_raises(scannet_tree):
+    """A well-formed tree that holds no frames — returning an empty FrameSet would
+    only fail later, at indexing, with a far less obvious message."""
+    rec = MockVGGTReconstructor(scene_dir=scannet_tree(n=0))
+    with pytest.raises(ValueError, match="is empty"):
+        rec.reconstruct(["v.jpg"], "unused")
+
+
 def test_implements_the_reconstructor_contract():
     assert issubclass(MockVGGTReconstructor, BaseReconstructor)
+
+
+def test_the_base_contract_is_not_optional():
+    """A subclass that forgets to reconstruct() must fail loudly, so a future
+    VGGTReconstructor can't half-implement the FrameSet contract."""
+
+    class _Incomplete(BaseReconstructor):
+        def reconstruct(self, rgb_paths, out_dir, *, on_progress=None):
+            return super().reconstruct(rgb_paths, out_dir, on_progress=on_progress)
+
+    with pytest.raises(NotImplementedError):
+        _Incomplete().reconstruct(["v.jpg"], "unused")

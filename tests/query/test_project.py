@@ -333,3 +333,27 @@ def test_simple_mode_keeps_all_points_no_clustering(populated_db):
 def test_unknown_mode_raises(populated_db):
     with pytest.raises(ValueError, match="mode"):
         ProjectTo3D(populated_db["db"], mode="bogus")
+
+
+def test_every_cluster_below_the_size_floor_keeps_one_whole_object(populated_db):
+    """A floor nothing clears must still yield a usable box, not an empty result
+    — the same fallback largest_cluster makes."""
+    di = _detected(populated_db)              # 64 points
+    out = _projector(
+        populated_db, mode="cluster_instances", min_instance_size=10_000
+    ).invoke(_state(populated_db, [di]))
+
+    assert len(out.projected) == 1
+    assert out.projected[0].points.shape[0] == 64      # everything kept as one
+    assert out.projected[0].bbox is not None
+
+
+def test_a_frame_without_an_rgb_path_projects_without_colors(populated_db):
+    """Depth and pose are what 3D needs; a missing RGB frame costs only colour."""
+    di = _detected(populated_db)
+    di.path = ""                              # no RGB to sample colours from
+
+    out = _projector(populated_db).invoke(_state(populated_db, [di]))
+
+    assert out.projected[0].points.shape == (64, 3)
+    assert out.projected[0].colors is None

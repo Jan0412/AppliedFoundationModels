@@ -65,6 +65,11 @@ def test_separability_zero_for_constant_scores():
     assert otsu_separability(np.full(100, 0.3, dtype=np.float32)) == 0.0
 
 
+def test_separability_zero_for_a_single_score():
+    """A one-frame pool has exactly zero variance — the η ratio would be 0/0."""
+    assert otsu_separability(np.array([0.3], dtype=np.float32)) == 0.0
+
+
 # ---------------------------------------------------------------------------
 # dynamic_pool_size
 # ---------------------------------------------------------------------------

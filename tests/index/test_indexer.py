@@ -512,6 +512,26 @@ def test_insert_missing_calibration_raises(indexer, make_image_files):
         indexer.insert(paths, collection_id="cmiss")
 
 
+def test_insert_incomplete_intrinsics_raises(indexer, make_image_files):
+    """Missing fx/fy/cx/cy must fail here, not silently at back-projection time."""
+    paths = make_image_files(2)
+    with pytest.raises(ValueError, match=r"missing keys.*'cx'"):
+        indexer.insert(
+            paths, collection_id="cbad", **_norm_calib(2),
+            intrinsics={"fx": 5.0, "fy": 6.0}, depth_scale=1000.0,
+        )
+
+
+def test_insert_non_mapping_intrinsics_raises(indexer, make_image_files):
+    """A 4-tuple is the obvious mistake — say so instead of raising TypeError."""
+    paths = make_image_files(2)
+    with pytest.raises(ValueError, match="must be a mapping"):
+        indexer.insert(
+            paths, collection_id="cbad", **_norm_calib(2),
+            intrinsics=5.0, depth_scale=1000.0,
+        )
+
+
 def test_insert_writes_vector_of_embedding_dim(indexer, mock_siglip_model, make_image_files):
     paths = make_image_files(2)
     indexer.insert(paths, collection_id="c7", **_calib(2))

@@ -105,3 +105,35 @@ def test_unsafe_collection_id_is_rejected(tmp_path):
     cache = SceneCloudCache(tmp_path / "cache")
     with pytest.raises(ValueError, match="unsafe"):
         cache.path_for("../etc/passwd")
+
+
+def test_a_corrupt_cache_file_rebuilds_instead_of_failing(
+    tmp_path, populated_store, counting_build
+):
+    """A half-written npz (killed mid-write, or an older format) is a miss, not
+    a 500 on page load."""
+    db, cid = populated_store
+    calls, points, colors = counting_build
+    cache = SceneCloudCache(tmp_path / "cache")
+
+    cache.get(db, cid)
+    cache.path_for(cid).write_bytes(b"not an npz at all")
+
+    p, c = cache.get(db, cid)
+
+    assert calls["n"] == 2                       # rebuilt
+    np.testing.assert_array_equal(p, points)
+    np.testing.assert_array_equal(c, colors)
+
+
+def test_a_cache_file_missing_a_key_rebuilds(tmp_path, populated_store, counting_build):
+    """An npz written by an older version lacks today's keys — treat it as a miss."""
+    db, cid = populated_store
+    calls, points, _ = counting_build
+    cache = SceneCloudCache(tmp_path / "cache")
+
+    cache.get(db, cid)
+    np.savez(cache.path_for(cid), points=points)     # no n_frames/voxel/row_count
+
+    cache.get(db, cid)
+    assert calls["n"] == 2

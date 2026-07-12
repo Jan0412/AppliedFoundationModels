@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 from PIL import Image
@@ -104,6 +106,79 @@ def test_all_invalid_falls_back_to_top_n(pool_from, meta_db):
         out = step.invoke(_state(pool))
 
     assert [f.id for f in out.retrieved] == ["id-0", "id-1", "id-2"]
+
+
+def test_unreadable_depth_warns_and_drops_only_that_frame(pool_from, meta_db):
+    """A corrupt depth PNG must cost one frame's geometry, not the whole query."""
+    pool = pool_from(_desc(6))
+    Path(pool[0].depth_path).write_bytes(b"not a png")
+    step = SelectDiverse(meta_db(), n_diverse=3)
+
+    with pytest.warns(UserWarning, match="cannot read depth for 'id-0'"):
+        out = step.invoke(_state(pool))
+
+    assert len(out.retrieved) == 3
+    # The other five still had usable geometry, so the selection stayed
+    # geometric and had no need to fall back on the unreadable frame.
+    assert "id-0" not in {f.id for f in out.retrieved}
+
+
+def test_a_depth_hole_at_the_frame_centre_invalidates_that_frame(pool_from, meta_db):
+    """An all-zero depth patch is a hole, not a 0 m surface — the frame has no
+    usable look-at point and must not drag the object centre to the camera."""
+    pool = pool_from(_desc(6), depth_values=[0] + [1000] * 5)
+    step = SelectDiverse(meta_db(), n_diverse=3)
+
+    out = step.invoke(_state(pool))
+
+    assert len(out.retrieved) == 3
+    assert "id-0" not in {f.id for f in out.retrieved}
+
+
+def test_all_depths_unreadable_falls_back_to_top_n(pool_from, meta_db):
+    pool = pool_from(_desc(6))
+    for frame in pool:
+        Path(frame.depth_path).write_bytes(b"not a png")
+    step = SelectDiverse(meta_db(), n_diverse=3)
+
+    with pytest.warns(UserWarning):
+        out = step.invoke(_state(pool))
+
+    assert [f.id for f in out.retrieved] == ["id-0", "id-1", "id-2"]
+
+
+def test_cameras_sitting_on_the_object_fall_back_to_top_n(pool_from, meta_db):
+    """Every camera centre coincides with the estimated object position, so no
+    viewing direction exists — diversity is undefined and similarity wins.
+
+    Built by parking all six cameras at the origin, half looking +Z and half
+    −Z: their look-at points straddle the origin, so the median object centre
+    lands exactly on every camera centre and all offsets are zero-length.
+    """
+    pool = pool_from(_desc(6))
+    for i, frame in enumerate(pool):
+        pose = np.eye(4, dtype=np.float32)
+        if i >= 3:
+            pose[:3, :3] = np.diag([1.0, -1.0, -1.0])    # optical axis flipped to −Z
+        frame.cam2world = pose
+    step = SelectDiverse(meta_db(), n_diverse=3)
+
+    with pytest.warns(UserWarning, match="degenerate"):
+        out = step.invoke(_state(pool))
+
+    assert [f.id for f in out.retrieved] == ["id-0", "id-1", "id-2"]
+
+
+def test_one_camera_on_the_object_is_skipped_not_fatal(pool_from, meta_db):
+    """A single degenerate frame drops out of the direction set; the rest still
+    get a geometric selection."""
+    pool = pool_from(_desc(6))
+    pool[0].cam2world = np.eye(4, dtype=np.float32)   # sits at the object centre
+    step = SelectDiverse(meta_db(), n_diverse=3)
+
+    out = step.invoke(_state(pool))
+
+    assert len(out.retrieved) == 3
 
 
 def test_missing_collection_meta_falls_back_to_top_n(pool_from, tmp_path):

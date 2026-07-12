@@ -112,6 +112,18 @@ def test_reingesting_the_same_collection_id_is_rejected(ingestor, tiny_video):
         ingestor.ingest(video, "clip")
 
 
+def test_a_video_that_yields_no_frames_fails_the_job(ingestor, tiny_video, monkeypatch):
+    """A video that decodes to nothing must fail loudly, not index an empty
+    collection that then answers every query with 'not found'."""
+    monkeypatch.setattr("src.ingest.pipeline.extract_frames", lambda *a, **kw: [])
+    job = JobRegistry.start("clip", total=0, stages=VideoIngestor.STAGES)
+
+    with pytest.raises(ValueError, match="no frames could be decoded"):
+        ingestor.ingest(tiny_video(n_frames=2, fps=2), "clip", job=job)
+
+    assert get_status(job.job_id)["state"] == "failed"
+
+
 @pytest.mark.parametrize(
     "filename, expected",
     [
@@ -123,3 +135,42 @@ def test_reingesting_the_same_collection_id_is_rejected(ingestor, tiny_video):
 )
 def test_sanitize_collection_id(filename, expected):
     assert sanitize_collection_id(filename) == expected
+
+
+# ---------------------------------------------------------------------------
+# from_config
+# ---------------------------------------------------------------------------
+
+
+def test_from_config_reads_the_ui_section(tmp_path, mock_indexer):
+    import yaml
+
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump({
+        "ui": {
+            "ingest_dir": str(tmp_path / "scenes"),
+            "extract_fps": 4.0,
+            "extract_max_frames": 120,
+        },
+    }))
+
+    ingestor = VideoIngestor.from_config(config, indexer=mock_indexer)
+
+    assert ingestor.fps == 4.0
+    assert ingestor.max_frames == 120
+    assert ingestor.scenes_dir == tmp_path / "scenes"
+    # The caller's indexer is reused — loading a second SigLIP is the bug here.
+    assert ingestor.indexer is mock_indexer
+    assert isinstance(ingestor.reconstructor, MockVGGTReconstructor)
+
+
+def test_from_config_falls_back_to_defaults(tmp_path, mock_indexer):
+    """A config with no ui: section still produces a usable ingestor."""
+    config = tmp_path / "config.yaml"
+    config.write_text("")
+
+    ingestor = VideoIngestor.from_config(config, indexer=mock_indexer)
+
+    assert ingestor.fps == 2.0
+    assert ingestor.max_frames == 300
+    assert ingestor.scenes_dir == Path("data/scenes")

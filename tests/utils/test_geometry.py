@@ -270,8 +270,12 @@ def test_largest_cluster_empty_returns_empty():
 # ---------------------------------------------------------------------------
 
 
-def _make_frameset(tmp_path, n=3):
-    """Minimal FrameSet-like object: n frames, 4x4 depth at 1 m, identity poses."""
+def _make_frameset(tmp_path, n=3, depth_values=None, with_rgb=True):
+    """Minimal FrameSet-like object: n frames, 4x4 depth at 1 m, identity poses.
+
+    ``depth_values`` overrides the raw depth per frame (0 = an all-hole frame).
+    ``with_rgb=False`` drops the RGB paths, as a depth-only reconstruction would.
+    """
     from dataclasses import dataclass
 
     @dataclass
@@ -286,14 +290,15 @@ def _make_frameset(tmp_path, n=3):
     dep_dir = tmp_path / "dep"
     img_dir.mkdir(parents=True)
     dep_dir.mkdir(parents=True)
+    values = depth_values if depth_values is not None else [1000] * n
 
     paths, depth_paths, poses = [], [], []
     for i in range(n):
         rgb_p = img_dir / f"{i}.png"
         dep_p = dep_dir / f"{i}.png"
         Image.new("RGB", (4, 4), color=(i * 50, 0, 0)).save(rgb_p)
-        Image.fromarray(np.full((4, 4), 1000, dtype=np.uint16)).save(dep_p)
-        paths.append(str(rgb_p))
+        Image.fromarray(np.full((4, 4), values[i], dtype=np.uint16)).save(dep_p)
+        paths.append(str(rgb_p) if with_rgb else None)
         depth_paths.append(str(dep_p))
         poses.append(np.eye(4, dtype=np.float32))
 
@@ -314,6 +319,37 @@ def test_build_scene_cloud_voxel_reduces_points(tmp_path):
     pts_fine, _ = build_scene_cloud(fs, n_frames=3, voxel=0.0)
     pts_coarse, _ = build_scene_cloud(fs, n_frames=3, voxel=1.0)
     assert len(pts_coarse) <= len(pts_fine)
+
+
+def test_build_scene_cloud_skips_frames_with_no_valid_depth(tmp_path):
+    """One dead frame (all depth holes) contributes nothing, and costs nothing."""
+    full = _make_frameset(tmp_path / "a", n=3)
+    holed = _make_frameset(tmp_path / "b", n=3, depth_values=[1000, 0, 1000])
+
+    pts_full, _ = build_scene_cloud(full, n_frames=3, voxel=0.0)
+    pts_holed, cols = build_scene_cloud(holed, n_frames=3, voxel=0.0)
+
+    assert 0 < len(pts_holed) < len(pts_full)
+    assert cols is not None and len(cols) == len(pts_holed)
+
+
+def test_build_scene_cloud_is_empty_when_no_frame_has_depth(tmp_path):
+    fs = _make_frameset(tmp_path, n=3, depth_values=[0, 0, 0])
+
+    pts, cols = build_scene_cloud(fs, n_frames=3, voxel=0.0)
+
+    assert pts.shape == (0, 3)
+    assert cols is None
+
+
+def test_build_scene_cloud_without_rgb_yields_no_colors(tmp_path):
+    """A depth-only reconstruction still gives geometry — just no colour."""
+    fs = _make_frameset(tmp_path, n=3, with_rgb=False)
+
+    pts, cols = build_scene_cloud(fs, n_frames=3, voxel=0.0)
+
+    assert len(pts) > 0
+    assert cols is None
 
 
 def test_build_scene_cloud_empty_frameset():
