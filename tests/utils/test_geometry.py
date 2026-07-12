@@ -218,6 +218,27 @@ def test_voxel_downsample_disabled_when_voxel_nonpositive():
     assert len(out) == 2                       # no dedup
 
 
+def test_voxel_downsample_inverse_maps_inputs_to_kept_points():
+    # 3 coincident points + 1 apart → 2 voxels. The inverse must send each
+    # input point to the kept row representing its voxel.
+    pts = np.array([[0, 0, 0], [0, 0, 0], [0, 0, 0], [1, 1, 1]], dtype=np.float32)
+    out, _, inverse = voxel_downsample(pts, voxel=0.1, return_inverse=True)
+
+    assert inverse.shape == (4,)
+    assert len(np.unique(inverse)) == len(out) == 2
+    # The three coincident points share a voxel; the outlier gets its own.
+    assert inverse[0] == inverse[1] == inverse[2] != inverse[3]
+    # Every input point maps to the kept point of its own voxel.
+    assert np.allclose(out[inverse], np.array([[0, 0, 0], [0, 0, 0],
+                                               [0, 0, 0], [1, 1, 1]]))
+
+
+def test_voxel_downsample_inverse_is_identity_when_disabled():
+    pts = np.array([[0, 0, 0], [1, 1, 1]], dtype=np.float32)
+    out, _, inverse = voxel_downsample(pts, voxel=0.0, return_inverse=True)
+    assert np.array_equal(inverse, np.arange(len(out)))
+
+
 # ---------------------------------------------------------------------------
 # largest_cluster
 # ---------------------------------------------------------------------------

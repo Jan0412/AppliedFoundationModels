@@ -224,6 +224,68 @@ def test_single_object_modes_use_only_best_mask(populated_db):
         assert out.projected[0].points.shape[0] == 32, mode
 
 
+# ---------------------------------------------------------------------------
+# min_views — multi-frame consensus
+# ---------------------------------------------------------------------------
+
+
+def test_min_views_drops_single_frame_clusters(populated_db):
+    # Two clusters, each seen from exactly ONE frame — the shape a SAM false
+    # positive takes once every mask is back-projected. min_views=2 rejects both.
+    hits = [
+        _detected(populated_db, frame=0),
+        _detected(populated_db, frame=1, cam2world=_pose([10, 10, 10])),
+    ]
+    proj = _projector(
+        populated_db, mode="cluster_instances", min_instance_size=1, min_views=2
+    )
+    with pytest.warns(UserWarning, match="consensus filter"):
+        out = proj.invoke(_state(populated_db, hits))
+
+    assert out.projected == []
+
+
+def test_min_views_keeps_object_seen_from_several_frames(populated_db):
+    # Both frames look at the same world region (identity pose) → one cluster
+    # backed by 2 distinct frames → survives min_views=2.
+    hits = [_detected(populated_db, frame=0), _detected(populated_db, frame=1)]
+    out = _projector(
+        populated_db, mode="cluster_instances", min_instance_size=1, min_views=2
+    ).invoke(_state(populated_db, hits))
+
+    assert len(out.projected) == 1
+
+
+def test_min_views_counts_frames_across_the_voxel_downsample(populated_db):
+    # Same two frames, but with voxel downsampling ON: both frames land in the
+    # same voxels, so each kept point carries only ONE frame's id. Counting
+    # views on the kept points alone would see 1 view and wrongly drop the
+    # object — the frame ids must be counted on the pre-downsample points.
+    hits = [_detected(populated_db, frame=0), _detected(populated_db, frame=1)]
+    out = _projector(
+        populated_db,
+        mode="cluster_instances",
+        voxel=0.05,             # collapses the two frames onto shared voxels
+        min_instance_size=1,
+        min_views=2,
+    ).invoke(_state(populated_db, hits))
+
+    assert len(out.projected) == 1
+
+
+def test_min_views_default_keeps_single_frame_clusters(populated_db):
+    # Default min_views=1 → consensus filter off, behaviour unchanged.
+    hits = [
+        _detected(populated_db, frame=0),
+        _detected(populated_db, frame=1, cam2world=_pose([10, 10, 10])),
+    ]
+    out = _projector(
+        populated_db, mode="cluster_instances", min_instance_size=1
+    ).invoke(_state(populated_db, hits))
+
+    assert len(out.projected) == 2
+
+
 def test_state_mode_overrides_constructor(populated_db):
     hits = [
         _detected(populated_db, frame=0),
