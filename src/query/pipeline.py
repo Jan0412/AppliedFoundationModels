@@ -85,6 +85,7 @@ class Search2D:
         mode: str = "cluster_single",
         max_instances: Optional[int] = None,
         min_instance_size: int = 50,
+        min_views: int = 1,
         voxel: float = 0.02,
         cluster_eps: float = 0.05,
         cluster_min_samples: int = 10,
@@ -111,6 +112,7 @@ class Search2D:
             bbox_percentile=bbox_percentile,
             max_instances=max_instances,
             min_instance_size=min_instance_size,
+            min_views=min_views,
         )
         self.chain = (
             self.embed | self.retrieve | self.select
@@ -163,6 +165,7 @@ class Search2D:
             mode=pcfg.get("mode", "cluster_single"),
             max_instances=pcfg.get("max_instances"),
             min_instance_size=pcfg.get("min_instance_size", 50),
+            min_views=pcfg.get("min_views", 1),
             voxel=pcfg.get("voxel", 0.02),
             cluster_eps=pcfg.get("cluster_eps", 0.05),
             cluster_min_samples=pcfg.get("cluster_min_samples", 10),

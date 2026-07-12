@@ -145,7 +145,8 @@ def voxel_downsample(
     points: np.ndarray,
     colors: Optional[np.ndarray] = None,
     voxel: float = 0.02,
-) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+    return_inverse: bool = False,
+):
     """Keep one point per occupied voxel (uniform density downsample).
 
     Besides bounding cost, this evens out density before clustering: an object
@@ -153,19 +154,36 @@ def voxel_downsample(
     while scattered background stays sparse.
 
     Args:
-        points: ``(N, 3)`` XYZ.
-        colors: Optional ``(N, 3)`` colors, kept in lockstep with *points*.
-        voxel:  Edge length in metres. ``<= 0`` disables downsampling.
+        points:         ``(N, 3)`` XYZ.
+        colors:         Optional ``(N, 3)`` colors, kept in lockstep with
+                        *points*.
+        voxel:          Edge length in metres. ``<= 0`` disables downsampling.
+        return_inverse: Also return an ``(N,)`` index mapping every *input*
+                        point to the row of the kept point that represents its
+                        voxel. Lets callers carry per-point provenance (e.g.
+                        which frame a point came from) across the downsample,
+                        which the kept points alone cannot express — each voxel
+                        keeps only one arbitrary source point.
 
     Returns:
-        ``(points, colors)`` reduced to one sample per voxel (order arbitrary).
+        ``(points, colors)`` reduced to one sample per voxel (order arbitrary),
+        or ``(points, colors, inverse)`` when *return_inverse* is set.
     """
     points = np.asarray(points)
     if voxel is None or voxel <= 0 or len(points) == 0:
-        return points, colors
+        inverse = np.arange(len(points))
+        return (points, colors, inverse) if return_inverse else (points, colors)
     keys = np.floor(points / voxel).astype(np.int64)
-    _, idx = np.unique(keys, axis=0, return_index=True)
-    return points[idx], (None if colors is None else np.asarray(colors)[idx])
+    # `idx` picks one representative per unique voxel; `inverse` indexes into
+    # that same unique ordering, so it addresses rows of the kept arrays.
+    _, idx, inverse = np.unique(
+        keys, axis=0, return_index=True, return_inverse=True
+    )
+    ds_points = points[idx]
+    ds_colors = None if colors is None else np.asarray(colors)[idx]
+    if not return_inverse:
+        return ds_points, ds_colors
+    return ds_points, ds_colors, np.asarray(inverse).reshape(-1)
 
 
 def cluster_masks(

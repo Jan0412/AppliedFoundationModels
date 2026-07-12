@@ -57,6 +57,14 @@ class ProjectTo3D(Runnable):
       (e.g. multiple chairs/books) should each be recovered: SAM's per-frame
       segments feed the cloud and 3D clustering splits them into instances.
 
+      Because every segment is back-projected, a false positive that SAM
+      grounds in a *single* frame lands as a dense, coherent blob — density
+      alone no longer distinguishes it from a real object. ``min_views``
+      restores the multi-frame consensus that top-1 selection used to give for
+      free: a cluster is kept only when its points come from at least that many
+      distinct frames, so single-frame flukes are dropped while genuinely
+      multi-view objects survive.
+
     The collection must have been indexed with depth + poses + calibration.
 
     Pre:  ``state.results`` or ``state.detected`` is set; the collection has a
@@ -75,6 +83,7 @@ class ProjectTo3D(Runnable):
         bbox_percentile: Tuple[float, float] = (2.0, 98.0),
         max_instances: Optional[int] = None,
         min_instance_size: int = 50,
+        min_views: int = 1,
     ) -> None:
         if mode not in _MODES:
             raise ValueError(
@@ -89,6 +98,7 @@ class ProjectTo3D(Runnable):
         self.bbox_percentile = bbox_percentile
         self.max_instances = max_instances
         self.min_instance_size = min_instance_size
+        self.min_views = min_views
         self._meta_cache: dict[str, dict] = {}
 
     def _meta(self, collection_id: str) -> dict:
@@ -150,11 +160,14 @@ class ProjectTo3D(Runnable):
         mode = state.mode or self.mode
         all_masks = mode == "cluster_instances"
 
-        # 1. Back-project every hit and accumulate one big point cloud.
+        # 1. Back-project every hit and accumulate one big point cloud. Each
+        # point remembers the frame it came from, so clusters can be scored on
+        # how many distinct frames back them (see min_views below).
         pts_parts: list[np.ndarray] = []
         col_parts: list[np.ndarray] = []
+        frame_parts: list[np.ndarray] = []
         have_colors = True
-        for hit in hits:
+        for frame_idx, hit in enumerate(hits):
             if not hit.depth_path or hit.cam2world is None:
                 warnings.warn(
                     f"ProjectTo3D: skipping '{hit.id}' — missing depth_path or "
@@ -177,6 +190,7 @@ class ProjectTo3D(Runnable):
             if len(points) == 0:
                 continue
             pts_parts.append(points)
+            frame_parts.append(np.full(len(points), frame_idx, dtype=np.int64))
             if colors is None:
                 have_colors = False
             else:
@@ -192,9 +206,15 @@ class ProjectTo3D(Runnable):
 
         all_points = np.concatenate(pts_parts)
         all_colors = np.concatenate(col_parts) if (have_colors and col_parts) else None
+        all_frames = np.concatenate(frame_parts)
 
-        # 2. Even out density before clustering.
-        ds_points, ds_colors = voxel_downsample(all_points, all_colors, self.voxel)
+        # 2. Even out density before clustering. `inverse` maps every original
+        # point to the kept point representing its voxel, so the per-point frame
+        # ids survive the downsample (a kept point alone only carries the frame
+        # of whichever source point happened to represent its voxel).
+        ds_points, ds_colors, inverse = voxel_downsample(
+            all_points, all_colors, self.voxel, return_inverse=True
+        )
 
         if mode == "simple":
             # 3a. No clustering — keep every back-projected point as one
@@ -237,6 +257,24 @@ class ProjectTo3D(Runnable):
             # floor) — keep everything as one object so the caller still
             # gets a usable box, mirroring largest_cluster's fallback.
             masks = [np.ones(len(ds_points), dtype=bool)]
+        if self.min_views > 1:
+            # Multi-frame consensus: a real object is segmented from several
+            # viewpoints, a SAM false positive usually from just one. `m` is a
+            # mask over kept points; m[inverse] lifts it back to the original
+            # points, whose frame ids we can then count.
+            kept = [
+                m for m in masks
+                if np.unique(all_frames[m[inverse]]).size >= self.min_views
+            ]
+            if not kept:
+                warnings.warn(
+                    f"ProjectTo3D: every cluster was backed by fewer than "
+                    f"min_views={self.min_views} frames — nothing survived the "
+                    "consensus filter. Lower min_views if the object is only "
+                    "visible in a few frames.",
+                    stacklevel=2,
+                )
+            masks = kept
         if self.max_instances is not None:
             masks = masks[: self.max_instances]
 
