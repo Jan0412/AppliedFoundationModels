@@ -82,3 +82,25 @@ def mock_siglip_model():
 @pytest.fixture
 def mock_indexer(tmp_path, mock_siglip_model):
     return Indexer(model=mock_siglip_model, db_path=tmp_path / "lancedb")
+
+
+#: Minimal ``models.vggt_omega`` block for VideoIngestor.from_config tests.
+VGGT_OMEGA_CONFIG = {
+    "model_id": "facebook/VGGT-Omega",
+    "checkpoint": "vggt_omega_fake.pt",
+    "device": "cpu",
+    "image_resolution": 512,
+    "preprocess_mode": "balanced",
+    "confidence_threshold": 10.0,
+    "depth_scale": 1000.0,
+    "max_frames": 120,
+}
+
+
+@pytest.fixture
+def stub_vggt_omega_load(monkeypatch):
+    """Skip HF download / weight load when from_config builds VGGT-Omega."""
+    monkeypatch.setattr(
+        "src.reconstruct.vggt_omega.VGGTOmegaReconstructor._load_model",
+        lambda self: MagicMock(name="VGGTOmega"),
+    )
