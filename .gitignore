@@ -12,3 +12,10 @@ wheels/
 # LanceDB vector store (generated data)
 data/lancedb/
 data/
+
+# Coverage artifacts (parallel runs leave one per host/pid)
+.coverage
+.coverage.*
+
+# Benchmark output — regenerate with scripts/eval_scanrefer_unique.py
+eval_results_scanrefer_*.json
