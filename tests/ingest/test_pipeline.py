@@ -13,9 +13,11 @@ import pytest
 
 from src.index import JobRegistry, get_status
 from src.ingest import VideoIngestor, sanitize_collection_id
-from src.reconstruct import MockVGGTReconstructor
+from src.reconstruct import MockVGGTReconstructor, VGGTOmegaReconstructor
 from src.utils.datasets import load_collection
 from src.utils.db import load_collection_meta
+
+from .conftest import VGGT_OMEGA_CONFIG
 
 
 @pytest.fixture
@@ -142,11 +144,13 @@ def test_sanitize_collection_id(filename, expected):
 # ---------------------------------------------------------------------------
 
 
-def test_from_config_reads_the_ui_section(tmp_path, mock_indexer):
+def test_from_config_reads_the_ui_section(tmp_path, mock_indexer, stub_vggt_omega_load):
     import yaml
 
     config = tmp_path / "config.yaml"
     config.write_text(yaml.safe_dump({
+        "models": {"vggt_omega": VGGT_OMEGA_CONFIG},
+        "reconstruct": {"backend": "vggt_omega"},
         "ui": {
             "ingest_dir": str(tmp_path / "scenes"),
             "extract_fps": 4.0,
@@ -161,16 +165,53 @@ def test_from_config_reads_the_ui_section(tmp_path, mock_indexer):
     assert ingestor.scenes_dir == tmp_path / "scenes"
     # The caller's indexer is reused — loading a second SigLIP is the bug here.
     assert ingestor.indexer is mock_indexer
-    assert isinstance(ingestor.reconstructor, MockVGGTReconstructor)
+    assert isinstance(ingestor.reconstructor, VGGTOmegaReconstructor)
 
 
-def test_from_config_falls_back_to_defaults(tmp_path, mock_indexer):
-    """A config with no ui: section still produces a usable ingestor."""
+def test_from_config_falls_back_to_ui_defaults(tmp_path, mock_indexer, stub_vggt_omega_load):
+    """No ui: / reconstruct: sections → UI defaults and VGGT-Omega backend."""
+    import yaml
+
     config = tmp_path / "config.yaml"
-    config.write_text("")
+    config.write_text(yaml.safe_dump({"models": {"vggt_omega": VGGT_OMEGA_CONFIG}}))
 
     ingestor = VideoIngestor.from_config(config, indexer=mock_indexer)
 
     assert ingestor.fps == 2.0
     assert ingestor.max_frames == 300
     assert ingestor.scenes_dir == Path("data/scenes")
+    assert isinstance(ingestor.reconstructor, VGGTOmegaReconstructor)
+
+
+def test_from_config_selects_mock_backend(tmp_path, mock_indexer):
+    import yaml
+
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump({"reconstruct": {"backend": "mock"}}))
+
+    ingestor = VideoIngestor.from_config(config, indexer=mock_indexer)
+    assert isinstance(ingestor.reconstructor, MockVGGTReconstructor)
+
+
+def test_from_config_rejects_unknown_backend(tmp_path, mock_indexer):
+    import yaml
+
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump({"reconstruct": {"backend": "nope"}}))
+
+    with pytest.raises(ValueError, match="unknown reconstruct.backend"):
+        VideoIngestor.from_config(config, indexer=mock_indexer)
+
+
+def test_from_config_requires_vggt_omega_section_when_selected(tmp_path, mock_indexer):
+    """vggt_omega backend needs models.vggt_omega — a missing section must fail loudly."""
+    import yaml
+
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump({
+        "models": {},
+        "reconstruct": {"backend": "vggt_omega"},
+    }))
+
+    with pytest.raises(KeyError):
+        VideoIngestor.from_config(config, indexer=mock_indexer)

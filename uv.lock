@@ -86,6 +86,7 @@ dependencies = [
     { name = "tqdm" },
     { name = "transformers" },
     { name = "vggt" },
+    { name = "vggt-omega" },
     { name = "viser" },
 ]
 
@@ -116,6 +117,7 @@ requires-dist = [
     { name = "tqdm", specifier = ">=4.66" },
     { name = "transformers", specifier = ">=5.9.0" },
     { name = "vggt", git = "https://github.com/facebookresearch/vggt.git" },
+    { name = "vggt-omega", git = "https://github.com/facebookresearch/vggt-omega.git" },
     { name = "viser", specifier = ">=1.0.30" },
 ]
 
@@ -3674,6 +3676,18 @@ source = { git = "https://github.com/facebookresearch/vggt.git#a288dd0f14786c934
 dependencies = [
     { name = "einops" },
     { name = "huggingface-hub" },
+    { name = "numpy" },
+    { name = "opencv-python" },
+    { name = "pillow" },
+    { name = "safetensors" },
+]
+
+[[package]]
+name = "vggt-omega"
+version = "0.0.1"
+source = { git = "https://github.com/facebookresearch/vggt-omega.git#39a0cb8af88554f15ddcb5354cd52bde588fa014" }
+dependencies = [
+    { name = "einops" },
     { name = "numpy" },
     { name = "opencv-python" },
     { name = "pillow" },

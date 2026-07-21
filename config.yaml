@@ -10,6 +10,20 @@ models:
     threshold: 0.5
     mask_threshold: 0.5
 
+  vggt_omega:
+    model_id: "facebook/VGGT-Omega"
+    checkpoint: "vggt_omega_1b_512.pt"
+    device: "cuda"
+    image_resolution: 512
+    preprocess_mode: "balanced"
+    max_frames: 120
+    confidence_threshold: 3.0   # zero depth pixels at or below this conf when writing PNGs
+    depth_scale: 1000.0          # PNG encode/decode only; VGGT geometry is still up-to-scale
+
+reconstruct:
+  backend: "vggt_omega"   # "vggt_omega" | "mock" (ScanNet GT passthrough)
+
+
 indexing:
   db_path: "data/lancedb"
   batch_size: 256        # optional — overrides models.siglip.batch_size

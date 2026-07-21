@@ -4,7 +4,10 @@ Three stages, tracked on one :class:`JobStatus` so a UI can show both which
 stage is running and how far into it we are::
 
     extract  →  reconstruct  →  index
-    (PyAV)      (VGGT, mocked)   (SigLIP → LanceDB)
+    (PyAV)      (VGGT-Omega)     (SigLIP → LanceDB)
+
+The reconstruct backend is selected by ``reconstruct.backend`` in the config
+(``vggt_omega`` by default; ``mock`` for the ScanNet GT passthrough).
 
 The ingestor never touches the UI: it only mutates the job, which any reader
 (a viser poller today, an HTTP handler tomorrow) can snapshot with
@@ -19,9 +22,29 @@ from pathlib import Path
 import yaml
 
 from src.index import Indexer, JobRegistry, JobStatus
-from src.reconstruct import BaseReconstructor, MockVGGTReconstructor
+from src.reconstruct import (
+    BaseReconstructor,
+    MockVGGTReconstructor,
+    VGGTOmegaReconstructor,
+)
 
 from .video import extract_frames, probe_frame_count
+
+#: Supported ``reconstruct.backend`` values in ``config.yaml``.
+_RECONSTRUCTOR_BACKENDS = ("vggt_omega", "mock")
+
+
+def _reconstructor_from_config(path: str | Path, cfg: dict) -> BaseReconstructor:
+    """Build the reconstructor named by ``reconstruct.backend`` (default Omega)."""
+    backend = (cfg.get("reconstruct") or {}).get("backend", "vggt_omega")
+    if backend == "vggt_omega":
+        return VGGTOmegaReconstructor.from_config(path)
+    if backend == "mock":
+        return MockVGGTReconstructor()
+    raise ValueError(
+        f"unknown reconstruct.backend {backend!r}; "
+        f"expected one of {_RECONSTRUCTOR_BACKENDS}"
+    )
 
 
 class VideoIngestor:
@@ -62,7 +85,7 @@ class VideoIngestor:
         *,
         indexer: Indexer | None = None,
     ) -> "VideoIngestor":
-        """Build an ingestor from the ``ui:`` section of *path*.
+        """Build an ingestor from the ``ui:`` and ``reconstruct:`` sections of *path*.
 
         Args:
             path:    Config file.
@@ -71,10 +94,7 @@ class VideoIngestor:
         """
         cfg = yaml.safe_load(Path(path).read_text()) or {}
         ui = cfg.get("ui", {}) or {}
-
-        # TODO: swap for VGGTReconstructor once VGGT is implemented — the
-        # FrameSet contract is unchanged, so this line is the whole migration.
-        reconstructor = MockVGGTReconstructor()
+        reconstructor = _reconstructor_from_config(path, cfg)
 
         return cls(
             indexer=indexer if indexer is not None else Indexer.from_config(path),

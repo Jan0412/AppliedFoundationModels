@@ -1,18 +1,11 @@
-"""Stand-in for VGGT: serves a real ScanNet scene instead of reconstructing.
+"""Optional ScanNet passthrough: serve ground-truth geometry instead of VGGT.
 
-VGGT is not implemented yet, but the rest of the ingestion path — frame
-extraction, indexing, querying, 3D projection, the UI — needs geometry to work
-against. Rather than fake it with synthetic depth (which produces a shell of
-points nobody can query meaningfully), this returns a *real* scene:
-scene0011_00 from the ScanNet mirror, subsampled to the number of frames the
-caller supplied.
-
-So: an uploaded video is **discarded** and its scene becomes a copy of
-scene0011_00. Retrieval, detection and projection then run on real frames with
-real depth and real poses, which is what makes the end-to-end flow worth
-demoing. When :class:`VGGTReconstructor` lands, swapping it in at
-:class:`~src.ingest.VideoIngestor` is the only change — this class's output
-contract is already the one the real thing must meet.
+:class:`~src.reconstruct.vggt_omega.VGGTOmegaReconstructor` is the default
+reconstructor. Select this class via ``reconstruct.backend: mock`` in
+``config.yaml`` (or inject it into :class:`~src.ingest.VideoIngestor`) when
+you want real depth and poses without running the model: an uploaded video is
+**discarded** and the scene becomes a subsample of scene0011_00 (or another
+ScanNet sequence passed to the constructor).
 """
 
 from __future__ import annotations
@@ -26,7 +19,7 @@ from src.utils.datasets import FrameSet, load_scannet
 
 from .base import BaseReconstructor
 
-#: The scene every "reconstruction" resolves to until VGGT is implemented.
+#: Default ScanNet sequence served when no ``scene_dir`` is passed.
 SCENE_DIR = "/storage/group/dataset_mirrors/scannet/scans/scene0011_00"
 
 #: Raw-depth → metres divisor for ScanNet's 16-bit depth PNGs.

@@ -8,24 +8,16 @@ per-collection intrinsics + a depth scale, bundled as a
 type means a video-ingested scene is indistinguishable from a TUM or ScanNet
 one, and no code past this module needs to know a reconstructor exists.
 
-Implementing the real thing
----------------------------
-:class:`MockVGGTReconstructor` stands in for VGGT today. A real
-``VGGTReconstructor`` implements the same :meth:`BaseReconstructor.reconstruct`
-and is swapped in at the single construction site in
-:class:`~src.ingest.VideoIngestor`. Sketch, following ``notebooks/VGGT.ipynb``:
-
-* Run ``VGGT.from_pretrained("facebook/VGGT-1B")`` over windows of frames.
-* Turn the predicted pose encoding into extrinsics + intrinsics with
-  ``vggt.utils.pose_enc.pose_encoding_to_extri_intri``; invert the extrinsics
-  to get cam-to-world.
-* Write the predicted depth as 16-bit PNGs (metres x ``depth_scale``) — they
-  may stay at VGGT's 518x518 model resolution;
-  :func:`~src.utils.geometry.backproject` already resizes masks to the depth
-  grid and rescales colour lookups when RGB and depth disagree.
-* Zero out low-confidence pixels; ``backproject`` drops depth <= 0.
-* Cross-window alignment (the notebook explores ICP) is the real work, and is
-  what the mock deliberately sidesteps.
+Backends
+--------
+:class:`~src.reconstruct.vggt_omega.VGGTOmegaReconstructor` is the production
+backend: it predicts up-to-scale depth and poses, writes confidence-filtered
+16-bit depth PNGs, and is the default of
+:meth:`~src.ingest.VideoIngestor.from_config`
+(``reconstruct.backend: vggt_omega``).
+:class:`~src.reconstruct.mock_vggt.MockVGGTReconstructor` implements the same
+:meth:`BaseReconstructor.reconstruct` contract but serves a fixed ScanNet
+sequence; select it with ``reconstruct.backend: mock``.
 """
 
 from __future__ import annotations
