@@ -1,18 +1,36 @@
 models:
+  # Which image/text embedder the indexer AND the query pipeline use:
+  # "siglip" | "clip". Both sides must agree, so this one key switches both.
+  # Override for a single run without editing this file: AFM_EMBEDDER=clip.
+  # Each embedder has its own LanceDB store (see indexing.db_paths) — vectors
+  # are not interchangeable across embedders.
+  embedder: "siglip"
+
   siglip:
     model_id: "google/siglip2-base-patch16-224"
+#   model_id: "google/siglip2-giant-opt-patch16-384"
     device: "auto"          # "auto" | "cuda" | "cpu"
     batch_size: 256
 
+  clip:
+    model_id: "openai/clip-vit-base-patch16"
+#   model_id: "openai/clip-vit-large-patch14"
+    device: "auto"          # "auto" | "cuda" | "cpu"
+    batch_size: 256         # 512-d projected vectors (ViT-B/16)
+
   sam:
+#   model_id: "facebook/sam3.1"
     model_id: "facebook/sam3"
     device: "auto"
     threshold: 0.5
     mask_threshold: 0.5
 
 indexing:
-  db_path: "data/lancedb"
-  batch_size: 256        # optional — overrides models.siglip.batch_size
+  db_path: "data/lancedb"   # fallback store when db_paths has no entry
+  db_paths:                 # one store per embedder — a table's vector width is
+    siglip: "data/lancedb"  # fixed at creation, and a query embedded by the
+    clip:   "data/lancedb_clip"   # other model would be meaningless anyway
+  batch_size: 256        # optional — overrides the embedder's own batch_size
 
 query:
   retrieval_mode: "dynamic"   # "topk" = legacy fixed-k | "dynamic" = Otsu-sized pool
