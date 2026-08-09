@@ -1,4 +1,4 @@
-"""2D image search pipeline (text → SigLIP → LanceDB → detector rerank).
+"""2D image search pipeline (text → embedder → LanceDB → detector rerank).
 
 Usage::
 

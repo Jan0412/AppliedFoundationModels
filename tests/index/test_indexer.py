@@ -89,7 +89,7 @@ def test_init_stores_model_reference(mock_siglip_model, tmp_db_path):
 def test_from_config_reads_indexing_section(tmp_indexing_config, mock_siglip_model):
     """from_config reads `indexing.db_path` and `indexing.batch_size`."""
     with patch(
-        "src.index.indexer.SigLIPModel.from_config",
+        "src.index.indexer.load_embedder",
         return_value=mock_siglip_model,
     ):
         idx = Indexer.from_config(tmp_indexing_config)
@@ -111,11 +111,46 @@ def test_from_config_falls_back_to_model_batch_size_when_unset(tmp_path, mock_si
     p.write_text(_yaml.dump(cfg))
 
     with patch(
-        "src.index.indexer.SigLIPModel.from_config",
+        "src.index.indexer.load_embedder",
         return_value=mock_siglip_model,
     ):
         idx = Indexer.from_config(p)
     assert idx.batch_size == mock_siglip_model.batch_size
+
+
+def test_from_config_writes_into_the_configured_embedders_store(
+    tmp_path, mock_siglip_model
+):
+    """Switching models.embedder must switch the store the index is written to.
+
+    A table's vector width is fixed when it is created, so indexing CLIP rows
+    into SigLIP's tables is a hard failure — one this routing prevents.
+    """
+    import yaml as _yaml
+    clip_db = tmp_path / "lancedb_clip"
+    cfg = {
+        "models": {
+            "embedder": "clip",
+            "siglip": {"model_id": "x", "device": "cpu", "batch_size": 99},
+            "clip": {"model_id": "z", "device": "cpu", "batch_size": 99},
+        },
+        "indexing": {
+            "db_path": str(tmp_path / "lancedb_siglip"),
+            "db_paths": {"siglip": str(tmp_path / "lancedb_siglip"),
+                         "clip": str(clip_db)},
+        },
+    }
+    p = tmp_path / "config.yaml"
+    p.write_text(_yaml.dump(cfg))
+
+    with patch(
+        "src.index.indexer.load_embedder",
+        return_value=mock_siglip_model,
+    ):
+        Indexer.from_config(p)
+
+    assert clip_db.exists()
+    assert not (tmp_path / "lancedb_siglip").exists()
 
 
 # ---------------------------------------------------------------------------

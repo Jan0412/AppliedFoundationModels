@@ -22,7 +22,7 @@ from src.query import (
 @pytest.fixture
 def pipeline(mock_siglip_model, mock_sam_model, populated_db) -> Search2D:
     return Search2D(
-        siglip=mock_siglip_model,
+        embedder=mock_siglip_model,
         detector=mock_sam_model,
         db=populated_db["db"],
     )
@@ -103,11 +103,11 @@ def test_init_injects_dependencies_into_steps(
     mock_siglip_model, mock_sam_model, populated_db
 ):
     pipeline = Search2D(
-        siglip=mock_siglip_model,
+        embedder=mock_siglip_model,
         detector=mock_sam_model,
         db=populated_db["db"],
     )
-    assert pipeline.embed.siglip is mock_siglip_model
+    assert pipeline.embed.embedder is mock_siglip_model
     assert pipeline.detect.detector is mock_sam_model
     assert pipeline.retrieve.db is populated_db["db"]
     assert pipeline.select.db is populated_db["db"]
@@ -127,7 +127,7 @@ def test_invoke_dynamic_mode_selects_diverse_subset(
     )
     dyn = db_with_sims(sims)
     pipeline = Search2D(
-        siglip=mock_siglip_model,
+        embedder=mock_siglip_model,
         detector=mock_sam_model,
         db=dyn["db"],
         strategy="plain",
@@ -174,7 +174,7 @@ def test_from_config_default_detector_is_sam(
     cfg_path = _write_cfg(tmp_path, db_dir)
 
     with patch(
-        "src.query.pipeline.SigLIPModel.from_config",
+        "src.query.pipeline.load_embedder",
         return_value=mock_siglip_model,
     ), patch(
         "src.query.pipeline.SAMModel.from_config",
@@ -182,7 +182,7 @@ def test_from_config_default_detector_is_sam(
     ):
         pipeline = Search2D.from_config(cfg_path)
 
-    assert pipeline.embed.siglip is mock_siglip_model
+    assert pipeline.embed.embedder is mock_siglip_model
     assert pipeline.detect.detector is mock_sam_model
     assert db_dir.exists()
 
@@ -193,7 +193,7 @@ def test_from_config_without_query_section_uses_defaults(
     cfg_path = _write_cfg(tmp_path, tmp_path / "db")
 
     with patch(
-        "src.query.pipeline.SigLIPModel.from_config",
+        "src.query.pipeline.load_embedder",
         return_value=mock_siglip_model,
     ), patch(
         "src.query.pipeline.SAMModel.from_config",
@@ -232,7 +232,7 @@ def test_from_config_reads_query_section(
     )
 
     with patch(
-        "src.query.pipeline.SigLIPModel.from_config",
+        "src.query.pipeline.load_embedder",
         return_value=mock_siglip_model,
     ), patch(
         "src.query.pipeline.SAMModel.from_config",
@@ -265,7 +265,7 @@ def test_from_config_reads_projection_section(
     )
 
     with patch(
-        "src.query.pipeline.SigLIPModel.from_config",
+        "src.query.pipeline.load_embedder",
         return_value=mock_siglip_model,
     ), patch(
         "src.query.pipeline.SAMModel.from_config",
@@ -279,11 +279,50 @@ def test_from_config_reads_projection_section(
     assert pipeline.project.cluster_eps == 0.08
 
 
+def test_from_config_opens_the_configured_embedders_store(
+    tmp_path, mock_siglip_model, mock_sam_model
+):
+    """A CLIP config must query CLIP's tables, not SigLIP's.
+
+    Searching a SigLIP index with a CLIP query vector would fail on the vector
+    width, or — worse, if the widths ever matched — silently return nonsense.
+    """
+    clip_db = tmp_path / "lancedb_clip"
+    cfg = {
+        "models": {
+            "embedder": "clip",
+            "siglip": {"model_id": "x", "device": "cpu", "batch_size": 1},
+            "clip": {"model_id": "z", "device": "cpu", "batch_size": 1},
+            "sam": {"model_id": "y", "device": "cpu",
+                    "threshold": 0.5, "mask_threshold": 0.5},
+        },
+        "indexing": {
+            "db_path": str(tmp_path / "lancedb_siglip"),
+            "db_paths": {"siglip": str(tmp_path / "lancedb_siglip"),
+                         "clip": str(clip_db)},
+        },
+    }
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml.dump(cfg))
+
+    with patch(
+        "src.query.pipeline.load_embedder",
+        return_value=mock_siglip_model,
+    ), patch(
+        "src.query.pipeline.SAMModel.from_config",
+        return_value=mock_sam_model,
+    ):
+        Search2D.from_config(cfg_path)
+
+    assert clip_db.exists()
+    assert not (tmp_path / "lancedb_siglip").exists()
+
+
 def test_from_config_rejects_unknown_detector(tmp_path, mock_siglip_model):
     cfg_path = _write_cfg(tmp_path, tmp_path / "db")
 
     with patch(
-        "src.query.pipeline.SigLIPModel.from_config",
+        "src.query.pipeline.load_embedder",
         return_value=mock_siglip_model,
     ):
         with pytest.raises(ValueError, match="unknown detector"):

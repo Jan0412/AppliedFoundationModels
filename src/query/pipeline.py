@@ -1,4 +1,4 @@
-"""2D image search pipeline: text query → SigLIP → LanceDB → detector rerank."""
+"""2D image search pipeline: text query → embedder → LanceDB → detector rerank."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Optional, Tuple
 import yaml
 
 from src.data_model import SearchState
-from src.models import SAMModel, SigLIPModel
+from src.models import BaseModel, SAMModel, db_path_for, load_embedder
 from src.utils.db import connect as _db_connect
 
 from .detect import Detect
@@ -70,7 +70,7 @@ class Search2D:
 
     def __init__(
         self,
-        siglip: SigLIPModel,
+        embedder: BaseModel,
         detector: SAMModel,
         db,
         *,
@@ -91,7 +91,7 @@ class Search2D:
         cluster_min_samples: int = 10,
         bbox_percentile: Tuple[float, float] = (2.0, 98.0),
     ) -> None:
-        self.embed = EmbedQuery(siglip)
+        self.embed = EmbedQuery(embedder)
         self.retrieve = RetrieveSimilar(
             db,
             mode=retrieval_mode,
@@ -133,25 +133,27 @@ class Search2D:
             detector: Which detector to wire — only ``"sam"`` (SAM3) is
                       supported; any other value raises ``ValueError``.
 
-        Reads ``indexing.db_path`` for the LanceDB store, the optional
-        ``query`` section for retrieval/selection parameters, and the optional
-        ``projection`` section for 3D fuse parameters (defaults apply when a
-        section is absent); SAM and SigLIP load their own sections via their
-        respective ``from_config`` classmethods.
+        Picks the embedder from ``models.embedder`` and opens *its* LanceDB
+        store (``indexing.db_paths`` / ``indexing.db_path``), so the query is
+        always embedded by the model that indexed the collection. The optional
+        ``query`` section supplies retrieval/selection parameters and the
+        optional ``projection`` section the 3D fuse parameters (defaults apply
+        when a section is absent); SAM and the embedder load their own sections
+        via their respective ``from_config`` classmethods.
         """
         cfg = yaml.safe_load(Path(path).read_text())
-        siglip = SigLIPModel.from_config(path)
+        embedder = load_embedder(path)
         if detector != "sam":
             raise ValueError(
                 f"Search2D.from_config: unknown detector {detector!r}. "
                 "Expected 'sam'."
             )
         det = SAMModel.from_config(path)
-        db = _db_connect(cfg["indexing"]["db_path"])
+        db = _db_connect(db_path_for(cfg))
         qcfg = cfg.get("query") or {}
         pcfg = cfg.get("projection") or {}
         return cls(
-            siglip=siglip,
+            embedder=embedder,
             detector=det,
             db=db,
             retrieval_mode=qcfg.get("retrieval_mode", "dynamic"),

@@ -1,4 +1,4 @@
-"""Image indexer: SigLIP embeddings → LanceDB.
+"""Image indexer: embeddings (SigLIP2 or CLIP) → LanceDB.
 
 One LanceDB table per ``collection_id``.  Every row has an explicit ``id``
 (caller-supplied or SHA-1 derived) and a ``collection_id`` column so that
@@ -35,7 +35,7 @@ import yaml
 from PIL import Image
 from tqdm.auto import tqdm
 
-from src.models import SigLIPModel
+from src.models import BaseModel, db_path_for, load_embedder
 from src.utils.db import connect as _db_connect
 
 from .status import JobRegistry, JobStatus
@@ -57,7 +57,7 @@ def _flatten_pose(pose) -> list[float]:
 
 
 class Indexer:
-    """Embed images with SigLIP and write them to LanceDB.
+    """Embed images with the configured embedder and write them to LanceDB.
 
     One LanceDB table per ``collection_id``; the table name *is* the
     collection id.  Rows are keyed by ``id``.
@@ -74,15 +74,20 @@ class Indexer:
 
     def __init__(
         self,
-        model: SigLIPModel,
+        model: BaseModel,
         db_path: str | Path,
         batch_size: int | None = None,
     ) -> None:
         """
         Args:
-            model:      Pre-loaded :class:`SigLIPModel`.  ``embed_images`` is
-                        the only method called; it is reused verbatim.
-            db_path:    Directory that LanceDB uses as its root store.
+            model:      Pre-loaded embedder (:class:`~src.models.siglib.SigLIPModel`
+                        or :class:`~src.models.clip.CLIPEmbedModel`).
+                        ``embed_images`` is the only method called; it is reused
+                        verbatim.  Must be the same model that queries against
+                        this store will use.
+            db_path:    Directory that LanceDB uses as its root store.  Use the
+                        embedder's own store — see
+                        :func:`~src.models.factory.db_path_for`.
             batch_size: Images per embedding call.  Defaults to
                         ``model.batch_size`` when ``None``.
         """
@@ -98,20 +103,22 @@ class Indexer:
     def from_config(cls, path: str | Path = "config.yaml") -> "Indexer":
         """Build an :class:`Indexer` from *path* (a YAML config file).
 
-        Reads ``indexing.db_path`` and optionally ``indexing.batch_size``.
-        The SigLIP model is constructed via :meth:`SigLIPModel.from_config`
-        using the same file.
+        The embedder is chosen by ``models.embedder`` and built via
+        :func:`~src.models.factory.load_embedder`; the store is *its* store
+        (``indexing.db_paths`` / ``indexing.db_path``), so an index can never
+        be written with one embedder into another's tables.
+        ``indexing.batch_size`` is optional.
 
         Example::
 
             idx = Indexer.from_config("config.yaml")
         """
         cfg = yaml.safe_load(Path(path).read_text())
-        model = SigLIPModel.from_config(path)
+        model = load_embedder(path)
         idx_cfg = cfg["indexing"]
         return cls(
             model=model,
-            db_path=idx_cfg["db_path"],
+            db_path=db_path_for(cfg),
             batch_size=idx_cfg.get("batch_size"),
         )
 
@@ -334,7 +341,7 @@ class Indexer:
             for start in range(0, len(records), self.batch_size):
                 batch = records[start : start + self.batch_size]
 
-                # Load images and embed (SigLIPModel.embed_images reused verbatim)
+                # Load images and embed (the embedder's embed_images, verbatim)
                 imgs = [r["load"]() for r in batch]
                 vecs = self.model.embed_images(imgs)   # (B, embedding_dim) float32
 

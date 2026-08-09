@@ -4,7 +4,7 @@ Three stages, tracked on one :class:`JobStatus` so a UI can show both which
 stage is running and how far into it we are::
 
     extract  →  reconstruct  →  index
-    (PyAV)      (VGGT, mocked)   (SigLIP → LanceDB)
+    (PyAV)      (VGGT, mocked)   (embedder → LanceDB)
 
 The ingestor never touches the UI: it only mutates the job, which any reader
 (a viser poller today, an HTTP handler tomorrow) can snapshot with
@@ -29,7 +29,7 @@ class VideoIngestor:
 
     Args:
         indexer:       Writes embeddings to LanceDB. Callers that already hold
-                       a loaded SigLIP should pass an :class:`Indexer` built
+                       a loaded embedder should pass an :class:`Indexer` built
                        around it rather than loading the model twice.
         reconstructor: Supplies depth + poses for the extracted frames.
         scenes_dir:    Root for per-scene working directories.

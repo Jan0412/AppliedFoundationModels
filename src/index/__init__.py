@@ -1,4 +1,4 @@
-"""Image indexing pipeline: SigLIP embeddings → LanceDB.
+"""Image indexing pipeline: embeddings (SigLIP2 or CLIP) → LanceDB.
 
 Usage::
 

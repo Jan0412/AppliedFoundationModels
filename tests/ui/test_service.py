@@ -255,13 +255,13 @@ def test_the_pipeline_is_built_once_and_reused(service, monkeypatch):
     assert builds == [service.config_path]     # loaded exactly once
 
 
-def test_the_ingestor_reuses_the_pipelines_siglip(service, monkeypatch):
+def test_the_ingestor_reuses_the_pipelines_embedder(service, monkeypatch):
     """Indexing and querying embed with the same model — loading a second copy
     onto the GPU is what this sharing avoids."""
     import src.ui.service as service_mod
 
     pipeline = _FakePipeline()
-    pipeline.embed = _Step(siglip="the-one-siglip")
+    pipeline.embed = _Step(embedder="the-one-embedder")
     service._pipeline = pipeline
 
     seen = {}
@@ -281,5 +281,5 @@ def test_the_ingestor_reuses_the_pipelines_siglip(service, monkeypatch):
     assert service._ensure_ingestor() == "ingestor"
     assert service._ensure_ingestor() == "ingestor"     # cached, not rebuilt
 
-    assert seen["model"] == "the-one-siglip"
+    assert seen["model"] == "the-one-embedder"
     assert seen["indexer"] == "indexer"

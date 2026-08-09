@@ -6,7 +6,7 @@ onto the same five methods (``list_scenes``, ``load_scene``, ``query``,
 ``ingest_video``, ``job_status``) without touching the pipeline.
 
 Models load lazily, so the server answers immediately on start and pays for
-SigLIP/SAM only when the first query arrives (:meth:`warmup` moves that cost to
+the embedder/SAM only when the first query arrives (:meth:`warmup` moves that cost to
 a background thread).
 """
 
@@ -22,6 +22,7 @@ import yaml
 from src.data_model import SearchState
 from src.index import Indexer, JobRegistry, get_status
 from src.ingest import VideoIngestor, sanitize_collection_id
+from src.models import db_path_for
 from src.query import Search2D
 from src.utils.db import META_TABLE, connect
 
@@ -43,7 +44,10 @@ class SceneService:
         ui = cfg.get("ui", {}) or {}
 
         self._indexing_cfg = cfg.get("indexing") or {}
-        self.db = connect(cfg["indexing"]["db_path"])
+        # The store belonging to the configured embedder — the UI must read the
+        # same tables Search2D queries.
+        self._db_path = db_path_for(cfg)
+        self.db = connect(self._db_path)
         self.ingest_dir = Path(ui.get("ingest_dir", "data/scenes"))
         self.cache = SceneCloudCache(
             ui.get("cache_dir", "data/scene_cache"),
@@ -228,14 +232,14 @@ class SceneService:
             return self._pipeline
 
     def _ensure_ingestor(self) -> VideoIngestor:
-        # Reuse the pipeline's SigLIP rather than loading a second copy onto the
-        # GPU — indexing and querying embed with the same model.
+        # Reuse the pipeline's embedder rather than loading a second copy onto
+        # the GPU — indexing and querying embed with the same model.
         pipeline = self._ensure_pipeline()
         with self._model_lock:
             if self._ingestor is None:
                 indexer = Indexer(
-                    model=pipeline.embed.siglip,
-                    db_path=self._indexing_cfg["db_path"],
+                    model=pipeline.embed.embedder,
+                    db_path=self._db_path,
                     batch_size=self._indexing_cfg.get("batch_size"),
                 )
                 self._ingestor = VideoIngestor.from_config(
