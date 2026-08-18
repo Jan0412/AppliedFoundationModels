@@ -34,10 +34,10 @@ indexing:
 
 query:
   retrieval_mode: "dynamic"   # "topk" = legacy fixed-k | "dynamic" = Otsu-sized pool
-  top_k_final: 5              # results kept after detector rerank (per-query overridable)
+  top_k_final: 10             # results kept after detector rerank (per-query overridable)
   strategy: "tail"            # Otsu variant for the pool threshold; "plain" keeps ~60% of frames
-  min_k: 10                   # pool floor + fallback size when the η gate fires
-  max_k: 400                  # pool cap
+  min_k: 50                   # pool floor + fallback size when the η gate fires
+  max_k: 200                  # pool cap
   min_separability: 0.75      # Otsu-η gate; uniform baseline (see notebooks/SimilarityHistogram.ipynb)
   n_diverse: 10               # viewpoint-diverse frames fed to the detector
   patch_frac: 0.2             # central-patch fraction for the robust look-at depth
@@ -46,11 +46,14 @@ projection:
   # mode selects how back-projected points become 3D object(s):
   #   simple            = no DBSCAN; keep all points as one object (looser box, no noise rejection)
   #   cluster_single    = DBSCAN, largest cluster -> one fused object (default; best for unique-object queries)
-  #   cluster_instances = DBSCAN, one object per cluster (most consensus first)
-  mode: "cluster_single"
+  #   cluster_instances = DBSCAN, one object per cluster (most consensus first);
+  #                       back-projects every SAM mask per frame, not just the best one
+  mode: "cluster_instances"
   max_instances: null         # cap in cluster_instances mode (null = keep all clusters)
-  min_instance_size: 50       # drop clusters smaller than this many points (post-voxel; cluster_instances only)
-  voxel: 0.02                 # voxel edge (m) for pre-cluster downsample; <=0 disables
+  min_instance_size: 500      # drop clusters smaller than this many points (post-voxel; cluster_instances only)
+  min_views: 3                # drop clusters backed by fewer than N distinct frames; rejects
+                              # single-frame SAM false positives (1 = off; cluster_instances only)
+  voxel: 0.01                 # voxel edge (m) for pre-cluster downsample; <=0 disables
   cluster_eps: 0.05           # DBSCAN radius (m); larger merges nearby instances (cluster_* modes)
   cluster_min_samples: 10     # DBSCAN core-point neighbour count; larger = stricter (cluster_* modes)
   bbox_percentile: [2.0, 98.0] # [low, high] percentile clamp for robust bounding box
@@ -60,6 +63,6 @@ ui:
   cache_dir: "data/scene_cache"   # npz cache of built scene point clouds
   ingest_dir: "data/scenes"       # uploaded videos + their extracted frames
   scene_n_frames: 250             # frames back-projected into the background cloud
-  voxel: 0.02                     # cloud downsample edge (m); also the render point size
+  voxel: 0.01                     # cloud downsample edge (m); also the render point size
   extract_fps: 2.0                # frames sampled per second of uploaded video
   extract_max_frames: 300         # hard cap on frames taken from one video
